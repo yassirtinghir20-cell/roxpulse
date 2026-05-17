@@ -380,7 +380,7 @@ function LogWorkout({onAdd, workouts}) {
   const [showGhost, setShowGhost] = useState(true)
 
  const activeStationIds = STATIONS.filter(s=>active[s.id]).map(s=>s.id)
-  const addCustom = () => setCustoms(p=>[...p,{id:`cx${Date.now()}`,name:"Exercice",sub:"reps",val:"",active:true}])
+  const addCustom = () => setCustoms(p=>[...p,{id:`cx${Date.now()}`,name:"Exercice",sub:"reps",val:"",active:true}]) 
   const updCx    = (id,f,v) => setCustoms(p=>p.map(c=>c.id===id?{...c,[f]:v}:c))
   const rmCx     = (id)     => setCustoms(p=>p.filter(c=>c.id!==id))
 
