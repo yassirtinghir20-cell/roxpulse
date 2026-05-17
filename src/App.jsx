@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react"
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, RadarChart, Radar, PolarGrid, PolarAngleAxis, CartesianGrid } from "recharts"
-import { getClientId, db } from "./db"
+import { getStoredClientId, setStoredClientId, clearStoredSession, db } from "./db"
 import { supabase } from "./supabase"
 
 /* ── TOKENS ─────────────────────────────────────────────── */
@@ -71,6 +71,21 @@ const computeROX = (workouts) => {
   return Math.min(100, Math.round(vol+imp+cons+bal))
 }
 
+/* ── 🎖️ BADGE SYSTEM ─────────────────────────────────────── */
+const BADGE_DEFS = [
+  {id:"first",    icon:"🌟",name:"Premier Pas",   rarity:"common",   unlock:w=>w.length>=1,          desc:"Première session enregistrée"},
+  {id:"regular",  icon:"🔁",name:"Régulier",      rarity:"common",   unlock:w=>w.length>=5,          desc:"5 sessions complétées"},
+  {id:"machine",  icon:"⚙️", name:"Machine",      rarity:"uncommon", unlock:w=>w.length>=10,         desc:"10 sessions complétées"},
+  {id:"sub60",    icon:"⚡",name:"Sub-60",         rarity:"rare",     unlock:w=>w.some(s=>s.total_time<3600), desc:"Terminer en moins d'1h"},
+  {id:"skierg",   icon:"🎿",name:"SkiErg King",   rarity:"uncommon", unlock:w=>w.some(s=>s.stations?.skierg&&s.stations.skierg<210), desc:"SkiErg sous 3:30"},
+  {id:"rowing",   icon:"🚣",name:"Rameur Elite",  rarity:"uncommon", unlock:w=>w.some(s=>s.stations?.rowing&&s.stations.rowing<240), desc:"Rowing sous 4:00"},
+  {id:"allround", icon:"⚖️",name:"All-Rounder",  rarity:"uncommon", unlock:w=>w.some(s=>Object.keys(s.stations||{}).filter(k=>s.stations[k]>0).length>=7), desc:"7 stations actives"},
+  {id:"ironweek", icon:"🗓️",name:"Iron Week",    rarity:"rare",     unlock:w=>{const byW={};w.forEach(s=>{const k=Math.floor(s.date/(7*24*3600*1000));byW[k]=(byW[k]||0)+1});return Object.values(byW).some(c=>c>=3)}, desc:"3 sessions en 7 jours"},
+  {id:"warrior",  icon:"🏆",name:"HYROX Warrior", rarity:"legendary",unlock:w=>w.length>=20&&w.some(s=>s.total_time<3600), desc:"20 sessions + PR sub-60"},
+]
+const RARITY_COL  = {common:C.t2, uncommon:C.green, rare:C.amber, legendary:C.orange}
+const computeBadges = (workouts) => BADGE_DEFS.map(b=>({...b, earned:b.unlock(workouts)}))
+
 /* ── STYLES ──────────────────────────────────────────────── */
 const S = {
   card:    {background:C.c1, border:`1px solid ${C.bd}`, borderRadius:12},
@@ -123,60 +138,106 @@ function Loading({msg="Chargement…"}) {
   )
 }
 
-/* ── ONBOARDING ──────────────────────────────────────────── */
-function Onboarding({onSave}) {
-  const [name, setName]         = useState("")
-  const [city, setCity]         = useState("")
+/* ── AUTH (Login + Signup) ───────────────────────────────── */
+function Auth({onAuth}) {
+  const [mode,     setMode]     = useState("login")
+  const [name,     setName]     = useState("")
+  const [password, setPassword] = useState("")
+  const [confirm,  setConfirm]  = useState("")
+  const [city,     setCity]     = useState("")
   const [category, setCategory] = useState("Débutant")
-  const [color, setColor]       = useState(AVATAR_COLORS[0])
-  const [saving, setSaving]     = useState(false)
+  const [color,    setColor]    = useState(AVATAR_COLORS[0])
+  const [error,    setError]    = useState("")
+  const [loading,  setLoading]  = useState(false)
 
   const submit = async () => {
-    if (!name.trim()) return
-    setSaving(true)
-    await onSave({name:name.trim(), city, category, color})
+    setError(""); setLoading(true)
+    if (!name.trim() || !password) { setError("Remplis tous les champs."); setLoading(false); return }
+    if (mode === "signup") {
+      if (password !== confirm) { setError("Les mots de passe ne correspondent pas."); setLoading(false); return }
+      if (password.length < 6)  { setError("Mot de passe trop court (min 6 caractères)."); setLoading(false); return }
+      const res = await db.signup({name:name.trim(), city, category, color}, password)
+      if (res.error) { setError(res.error); setLoading(false); return }
+      onAuth(res.data, res.clientId)
+    } else {
+      const res = await db.login(name.trim(), password)
+      if (res.error) { setError(res.error); setLoading(false); return }
+      onAuth(res.data, res.clientId)
+    }
+    setLoading(false)
   }
 
   return (
     <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Barlow',sans-serif",color:C.t1}}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;900&family=Barlow+Condensed:wght@700;900&family=JetBrains+Mono:wght@400;600&display=swap');*{box-sizing:border-box}`}</style>
       <div style={{...S.card, maxWidth:460, width:"100%", padding:"44px 36px"}}>
-        <div style={{textAlign:"center", marginBottom:36}}>
+        <div style={{textAlign:"center", marginBottom:28}}>
           <div style={{fontFamily:"'Barlow Condensed',sans-serif", fontSize:44, fontWeight:900, letterSpacing:"-2px", color:C.orange}}>ROXPULSE</div>
-          <div style={{color:C.t2, marginTop:6, fontSize:14}}>Crée ton profil et rejoins la communauté</div>
+          <div style={{color:C.t2, marginTop:6, fontSize:14}}>
+            {mode==="login" ? "Connecte-toi à ton compte" : "Crée ton profil et rejoins la communauté"}
+          </div>
         </div>
-        <div style={{display:"flex", flexDirection:"column", gap:20}}>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:0,background:C.c3,borderRadius:10,padding:4,marginBottom:24}}>
+          {[["login","Se connecter"],["signup","Créer un compte"]].map(([m,l])=>(
+            <button key={m} onClick={()=>{setMode(m);setError("")}} style={{background:mode===m?C.c1:"transparent",color:mode===m?C.t1:C.t2,border:`1px solid ${mode===m?C.bd:"transparent"}`,borderRadius:8,padding:"8px 0",cursor:"pointer",fontWeight:mode===m?700:500,fontSize:13,fontFamily:"inherit",transition:"all 0.15s"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+
+        <div style={{display:"flex", flexDirection:"column", gap:16}}>
           <div>
-            <label style={S.label}>Prénom / Pseudo</label>
-            <input style={S.input} value={name} onChange={e=>setName(e.target.value)} placeholder="Ex: Omar Idrissi" />
+            <label style={S.label}>Pseudo / Nom</label>
+            <input style={S.input} value={name} onChange={e=>setName(e.target.value)} placeholder="Ex: Omar Idrissi" onKeyDown={e=>e.key==="Enter"&&submit()}/>
           </div>
-          <div>
-            <label style={S.label}>Ville</label>
-            <select style={{...S.input, cursor:"pointer", appearance:"none", backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat:"no-repeat", backgroundPosition:"right 14px center"}} value={city} onChange={e=>setCity(e.target.value)}>
-              <option value="">— Choisir une ville —</option>
-              {VILLES.map(v=><option key={v}>{v}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={S.label}>Niveau</label>
-            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8}}>
-              {CATEGORIES.map(cat=>(
-                <button key={cat} onClick={()=>setCategory(cat)} style={{background:category===cat?C.orange+"22":"transparent", border:`2px solid ${category===cat?C.orange:C.bd}`, borderRadius:8, padding:10, cursor:"pointer", color:category===cat?C.orange:C.t2, fontWeight:700, fontSize:12, fontFamily:"inherit", transition:"all 0.15s"}}>
-                  {cat}
-                </button>
-              ))}
+
+          {mode==="signup" && (<>
+            <div>
+              <label style={S.label}>Ville</label>
+              <select style={{...S.input, cursor:"pointer", appearance:"none", backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat:"no-repeat", backgroundPosition:"right 14px center"}} value={city} onChange={e=>setCity(e.target.value)}>
+                <option value="">— Choisir une ville —</option>
+                {VILLES.map(v=><option key={v}>{v}</option>)}
+              </select>
             </div>
-          </div>
-          <div>
-            <label style={S.label}>Couleur avatar</label>
-            <div style={{display:"flex", gap:10, flexWrap:"wrap"}}>
-              {AVATAR_COLORS.map(col=>(
-                <div key={col} onClick={()=>setColor(col)} style={{width:34,height:34,borderRadius:"50%",background:col,cursor:"pointer",border:color===col?"3px solid white":"3px solid transparent",transition:"border 0.1s"}} />
-              ))}
+            <div>
+              <label style={S.label}>Niveau</label>
+              <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8}}>
+                {CATEGORIES.map(cat=>(
+                  <button key={cat} onClick={()=>setCategory(cat)} style={{background:category===cat?C.orange+"22":"transparent", border:`2px solid ${category===cat?C.orange:C.bd}`, borderRadius:8, padding:10, cursor:"pointer", color:category===cat?C.orange:C.t2, fontWeight:700, fontSize:12, fontFamily:"inherit"}}>
+                    {cat}
+                  </button>
+                ))}
+              </div>
             </div>
+            <div>
+              <label style={S.label}>Couleur avatar</label>
+              <div style={{display:"flex", gap:10, flexWrap:"wrap"}}>
+                {AVATAR_COLORS.map(col=><div key={col} onClick={()=>setColor(col)} style={{width:34,height:34,borderRadius:"50%",background:col,cursor:"pointer",border:color===col?"3px solid white":"3px solid transparent"}}/>)}
+              </div>
+            </div>
+          </>)}
+
+          <div>
+            <label style={S.label}>Mot de passe</label>
+            <input type="password" style={S.input} value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" onKeyDown={e=>e.key==="Enter"&&submit()}/>
           </div>
-          <button disabled={!name.trim()||saving} style={{...S.btn, width:"100%", padding:"14px", fontSize:14, marginTop:8, opacity:name.trim()&&!saving?1:0.4}} onClick={submit}>
-            {saving ? "Création…" : "Créer mon profil →"}
+
+          {mode==="signup" && (
+            <div>
+              <label style={S.label}>Confirmer le mot de passe</label>
+              <input type="password" style={S.input} value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="••••••••" onKeyDown={e=>e.key==="Enter"&&submit()}/>
+            </div>
+          )}
+
+          {error && (
+            <div style={{background:C.red+"11",border:`1px solid ${C.red}33`,borderRadius:8,padding:"10px 14px",fontSize:13,color:C.red,fontWeight:500}}>
+              ⚠️ {error}
+            </div>
+          )}
+
+          <button disabled={loading} style={{...S.btn, width:"100%", padding:"14px", fontSize:14, marginTop:4, opacity:loading?0.5:1}} onClick={submit}>
+            {loading ? "..." : mode==="login" ? "Se connecter →" : "Créer mon compte →"}
           </button>
         </div>
       </div>
@@ -379,8 +440,8 @@ function LogWorkout({onAdd, workouts}) {
   const [editing, setEditing] = useState(null)
   const [showGhost, setShowGhost] = useState(true)
 
- const activeStationIds = STATIONS.filter(s=>active[s.id]).map(s=>s.id)
-  const addCustom = () => setCustoms(p=>[...p,{id:`cx${Date.now()}`,name:"Exercice",sub:"reps",val:"",active:true}]) 
+  const activeStationIds = STATIONS.filter(s=>active[s.id]).map(s=>s.id)
+  const addCustom = () => setCustoms(p=>[...p,{id:`cx${Date.now()}`,name:"Exercice",sub:"reps",val:"",active:true}])
   const updCx    = (id,f,v) => setCustoms(p=>p.map(c=>c.id===id?{...c,[f]:v}:c))
   const rmCx     = (id)     => setCustoms(p=>p.filter(c=>c.id!==id))
 
@@ -510,7 +571,7 @@ function LogWorkout({onAdd, workouts}) {
 }
 
 /* ── COMMUNITY ───────────────────────────────────────────── */
-function Community({clientId, myProfile, myWorkouts, community, friends, onFriendToggle}) {
+function Community({clientId, myProfile, myWorkouts, community, friends, onFriendToggle, onViewProfile}) {
   const [filter, setFilter] = useState("all")
 
   const best = myWorkouts.length ? Math.min(...myWorkouts.map(w=>w.total_time)) : 9999
@@ -543,7 +604,7 @@ function Community({clientId, myProfile, myWorkouts, community, friends, onFrien
           const isFriend= friends.includes(u.client_id)
           const medal   = rank===1?"🥇":rank===2?"🥈":rank===3?"🥉":`#${rank}`
           return (
-            <div key={u.client_id} style={{display:"flex",alignItems:"center",padding:"12px 22px",background:isMe?C.orange+"10":"transparent",borderLeft:`3px solid ${isMe?C.orange:"transparent"}`,gap:14,borderBottom:i<list.length-1?`1px solid ${C.bd}`:"none"}}>
+            <div key={u.client_id} onClick={()=>onViewProfile(u,[])} style={{display:"flex",alignItems:"center",padding:"12px 22px",background:isMe?C.orange+"10":"transparent",borderLeft:`3px solid ${isMe?C.orange:"transparent"}`,gap:14,borderBottom:i<list.length-1?`1px solid ${C.bd}`:"none",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background=isMe?C.orange+"18":C.c2+"80"} onMouseLeave={e=>e.currentTarget.style.background=isMe?C.orange+"10":"transparent"}>
               <div style={{width:32,textAlign:"center",fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:rank<=3?C.amber:C.t3,fontSize:rank<=3?17:13}}>{medal}</div>
               <Avatar name={u.name} color={u.color} size={38} />
               <div style={{flex:1,minWidth:0}}>
@@ -562,7 +623,7 @@ function Community({clientId, myProfile, myWorkouts, community, friends, onFrien
                 <div style={{fontSize:11,color:C.amber,fontWeight:700,marginTop:2}}>{(u.points||0).toLocaleString()} pts</div>
               </div>
               {!isMe && (
-                <button onClick={()=>onFriendToggle(u.client_id)} style={{background:isFriend?C.green+"22":"transparent",color:isFriend?C.green:C.t3,border:`1px solid ${isFriend?C.green:C.bd}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                <button onClick={(e)=>{e.stopPropagation();onFriendToggle(u.client_id)}} style={{background:isFriend?C.green+"22":"transparent",color:isFriend?C.green:C.t3,border:`1px solid ${isFriend?C.green:C.bd}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",whiteSpace:"nowrap"}}>
                   {isFriend?"✓ Ami":"+ Ajouter"}
                 </button>
               )}
@@ -570,6 +631,120 @@ function Community({clientId, myProfile, myWorkouts, community, friends, onFrien
           )
         })}
       </div>
+    </div>
+  )
+}
+
+/* ── 👤 PROFILE PAGE ─────────────────────────────────────── */
+function ProfilePage({user, workouts, isMe, onBack, onFriendToggle, isFriend}) {
+  const sorted   = [...workouts].sort((a,b)=>a.date-b.date)
+  const best     = workouts.length ? Math.min(...workouts.map(w=>w.total_time)) : null
+  const roxScore = computeROX(workouts)
+  const badges   = computeBadges(workouts)
+  const earned   = badges.filter(b=>b.earned)
+
+  // Best time per station across all sessions
+  const stationBests = {}
+  STATIONS.forEach(s => {
+    const vals = workouts.map(w=>w.stations?.[s.id]).filter(v=>v>0)
+    if (vals.length) stationBests[s.id] = Math.min(...vals)
+  })
+
+  const tierColor = roxScore>=80?C.orange:roxScore>=60?"#FF1744":roxScore>=40?C.amber:roxScore>=20?C.green:C.t2
+  const tier      = roxScore>=80?"Légende":roxScore>=60?"Elite":roxScore>=40?"Pro":roxScore>=20?"Confirmé":"Rookie"
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      {onBack && <button onClick={onBack} style={{...S.btnGhost,alignSelf:"flex-start",fontSize:12,padding:"7px 14px"}}>← Retour</button>}
+
+      {/* Header card */}
+      <div style={{...S.card,padding:"28px 26px",position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",top:0,left:0,right:0,height:4,background:`linear-gradient(90deg,${user.color},${user.color}44)`}}/>
+        <div style={{display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+          <Avatar name={user.name} color={user.color} size={72}/>
+          <div style={{flex:1,minWidth:200}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,fontWeight:900,letterSpacing:"-0.5px"}}>{user.name}</div>
+              {isMe && <span style={{...S.tag(C.orange)}}>Mon profil</span>}
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap",alignItems:"center"}}>
+              <span style={S.tag(CAT_COLOR[user.category]||C.t2)}>{user.category}</span>
+              {user.city && <span style={{fontSize:13,color:C.t2}}>📍 {user.city}</span>}
+            </div>
+            <div style={{fontSize:12,color:C.t3,marginTop:6}}>Membre depuis {user.joined_at?new Date(user.joined_at).toLocaleDateString("fr-FR",{month:"long",year:"numeric"}):"--"}</div>
+          </div>
+          {!isMe && (
+            <button onClick={onFriendToggle} style={{...S.btn,background:isFriend?"transparent":C.orange,color:isFriend?C.green:C.t1,border:`1px solid ${isFriend?C.green:C.orange}`,padding:"10px 20px"}}>
+              {isFriend?"✓ Ami":"+ Ajouter comme ami"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+        <StatCard label="Sessions" value={workouts.length} sub="entraînements"/>
+        <StatCard label="Meilleur temps" value={best?fmt(best):"--"} accent={C.orange}/>
+        <StatCard label="ROX Score™" value={roxScore} sub={tier} accent={tierColor}/>
+        <StatCard label="Points" value={(user.points||0).toLocaleString()} accent={C.amber}/>
+      </div>
+
+      {/* Station bests */}
+      {Object.keys(stationBests).length > 0 && (
+        <div style={{...S.card,padding:"20px 22px"}}>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:14}}>🏅 Meilleurs temps par station</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            {STATIONS.map(s => stationBests[s.id] ? (
+              <div key={s.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",background:C.c2,borderRadius:8,border:`1px solid ${C.bd}`}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:600,color:C.t1}}>{s.name}</div>
+                  <div style={{fontSize:10,color:C.orange}}>{s.sub}</div>
+                </div>
+                <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:16,fontWeight:700,color:C.t1}}>{fmt(stationBests[s.id])}</div>
+              </div>
+            ) : null)}
+          </div>
+        </div>
+      )}
+
+      {/* Badges */}
+      <div style={{...S.card,padding:"18px 20px"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>🎖️ Badges</div>
+          <span style={{fontSize:12,color:C.amber,fontWeight:700}}>{earned.length}/{badges.length} débloqués</span>
+        </div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          {badges.map(b=>(
+            <div key={b.id} title={`${b.name} — ${b.desc}`} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"10px 12px",borderRadius:10,background:b.earned?C.c2:C.bg,border:`1px solid ${b.earned?RARITY_COL[b.rarity]:C.bd}`,opacity:b.earned?1:0.3,minWidth:54,transition:"all 0.2s"}}>
+              <span style={{fontSize:22}}>{b.icon}</span>
+              <span style={{fontSize:9,fontWeight:700,color:b.earned?RARITY_COL[b.rarity]:C.t3,textTransform:"uppercase",letterSpacing:"0.5px",textAlign:"center",lineHeight:1.2}}>{b.name}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Session history */}
+      {workouts.length > 0 && (
+        <div style={{...S.card,padding:"20px 22px"}}>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:14}}>📋 Historique des sessions</div>
+          {[...sorted].reverse().slice(0,8).map((w,i)=>(
+            <div key={w.id} style={{display:"flex",alignItems:"center",padding:"10px 0",borderBottom:i<Math.min(7,workouts.length-1)?`1px solid ${C.bd}`:"none"}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,fontSize:13}}>{fmtDate(w.date)}</div>
+                {w.notes&&<div style={{fontSize:11,color:C.t2,marginTop:2}}>{w.notes}</div>}
+              </div>
+              <div style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:600,fontSize:18,color:i===0?C.green:C.t1}}>{fmt(w.total_time)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {workouts.length === 0 && (
+        <div style={{...S.card,padding:"40px",textAlign:"center",color:C.t2}}>
+          <div style={{fontSize:32,marginBottom:10}}>🏋️</div>
+          <div style={{fontSize:14,fontWeight:600}}>Aucune session enregistrée pour l'instant</div>
+        </div>
+      )}
     </div>
   )
 }
@@ -885,35 +1060,54 @@ function Schedule({clientId, myProfile, sessions, onAdd, onJoin, onUpdateWorkout
 
 /* ── APP PRINCIPAL ───────────────────────────────────────── */
 export default function App() {
-  const clientId = useMemo(() => getClientId(), [])
-
-  const [profile,  setProfile]  = useState(null)
-  const [workouts, setWorkouts] = useState([])
-  const [sessions, setSessions] = useState([])
-  const [community,setCommunity]= useState([])
-  const [friends,  setFriends]  = useState(db.getFriends())
-  const [tab,      setTab]      = useState("dashboard")
-  const [loading,  setLoading]  = useState(true)
+  const [clientId,  setClientId]  = useState(null)
+  const [profile,   setProfile]   = useState(null)
+  const [workouts,  setWorkouts]  = useState([])
+  const [sessions,  setSessions]  = useState([])
+  const [community, setCommunity] = useState([])
+  const [friends,   setFriends]   = useState(db.getFriends())
+  const [tab,       setTab]       = useState("dashboard")
+  const [viewingProfile, setViewingProfile] = useState(null)
+  const [loading,   setLoading]   = useState(true)
 
   useEffect(() => {
     (async () => {
-      const [prof, wkts, sess, comm] = await Promise.all([
-        db.getProfile(clientId),
-        db.getWorkouts(clientId),
-        db.getSessions(),
-        db.getAllProfiles(),
-      ])
-      setProfile(prof)
-      setWorkouts(wkts)
-      setSessions(sess)
-      setCommunity(comm)
+      const storedId = getStoredClientId()
+      if (storedId) {
+        const [prof, wkts, sess, comm] = await Promise.all([
+          db.getProfile(storedId),
+          db.getWorkouts(storedId),
+          db.getSessions(),
+          db.getAllProfiles(),
+        ])
+        if (prof) {
+          setClientId(storedId)
+          setProfile(prof)
+          setWorkouts(wkts)
+          setSessions(sess)
+          setCommunity(comm)
+        }
+      }
       setLoading(false)
     })()
-  }, [clientId])
+  }, [])
 
-  const handleSaveProfile = async (data) => {
-    const saved = await db.upsertProfile(clientId, data)
-    setProfile(saved)
+  const handleAuth = async (profileData, cid) => {
+    setClientId(cid)
+    setProfile(profileData)
+    const [wkts, sess, comm] = await Promise.all([
+      db.getWorkouts(cid),
+      db.getSessions(),
+      db.getAllProfiles(),
+    ])
+    setWorkouts(wkts)
+    setSessions(sess)
+    setCommunity(comm)
+  }
+
+  const handleLogout = () => {
+    clearStoredSession()
+    setClientId(null); setProfile(null); setWorkouts([]); setSessions([]); setCommunity([])
   }
 
   const handleAddWorkout = async (workout) => {
@@ -956,7 +1150,7 @@ export default function App() {
   }
 
   if (loading)  return <Loading />
-  if (!profile) return <Onboarding onSave={handleSaveProfile} />
+  if (!profile) return <Auth onAuth={handleAuth} />
 
   const NAV = [
     {id:"dashboard", label:"Dashboard",    icon:"⚡"},
@@ -978,20 +1172,42 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div style={{display:"flex",alignItems:"center",gap:10,paddingLeft:20}}>
-          <Avatar name={profile.name} color={profile.color} size={32} />
-          <div>
-            <div style={{fontWeight:600,fontSize:13,lineHeight:1.2}}>{profile.name}</div>
-            <div style={{fontSize:11,color:C.t2}}>{profile.category}{profile.city?` · ${profile.city}`:""}</div>
+        <div style={{display:"flex",alignItems:"center",gap:10,paddingLeft:16}}>
+          <div onClick={()=>setTab("profile")} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:"10px 8px",borderRadius:8,transition:"opacity 0.15s"}} onMouseEnter={e=>e.currentTarget.style.opacity="0.75"} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
+            <Avatar name={profile.name} color={profile.color} size={32} />
+            <div>
+              <div style={{fontWeight:600,fontSize:13,lineHeight:1.2}}>{profile.name}</div>
+              <div style={{fontSize:11,color:C.t2}}>{profile.category}{profile.city?` · ${profile.city}`:""}</div>
+            </div>
           </div>
+          <button onClick={handleLogout} title="Se déconnecter" style={{background:"transparent",border:`1px solid ${C.bd}`,borderRadius:8,color:C.t3,cursor:"pointer",fontSize:16,padding:"6px 10px",lineHeight:1}} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.t3}>
+            ⏻
+          </button>
         </div>
       </div>
 
       <div style={{maxWidth:920,margin:"0 auto",padding:"24px 20px"}}>
-        {tab==="dashboard" && <Dashboard workouts={workouts} />}
-        {tab==="log"       && <LogWorkout onAdd={handleAddWorkout} workouts={workouts} />}
-        {tab==="community" && <Community clientId={clientId} myProfile={profile} myWorkouts={workouts} community={community} friends={friends} onFriendToggle={handleFriendToggle} />}
-        {tab==="schedule"  && <Schedule  clientId={clientId} myProfile={profile} sessions={sessions} onAdd={handleAddSession} onJoin={handleJoinSession} onUpdateWorkout={handleUpdateWorkout} onLogResult={handleLogResult} />}
+        {viewingProfile ? (
+          <ProfilePage
+            user={viewingProfile.user}
+            workouts={viewingProfile.workouts}
+            isMe={viewingProfile.user.client_id===clientId||viewingProfile.user.client_id==="me"}
+            onBack={()=>setViewingProfile(null)}
+            isFriend={friends.includes(viewingProfile.user.client_id)}
+            onFriendToggle={()=>handleFriendToggle(viewingProfile.user.client_id)}
+          />
+        ) : tab==="profile" ? (
+          <ProfilePage
+            user={{...profile, client_id:clientId}}
+            workouts={workouts}
+            isMe={true}
+            onBack={()=>setTab("dashboard")}
+          />
+        ) : tab==="dashboard" ? <Dashboard workouts={workouts} />
+          : tab==="log"       ? <LogWorkout onAdd={handleAddWorkout} workouts={workouts} />
+          : tab==="community" ? <Community clientId={clientId} myProfile={profile} myWorkouts={workouts} community={community} friends={friends} onFriendToggle={handleFriendToggle} onViewProfile={(user,wkts)=>setViewingProfile({user,workouts:wkts})} />
+          : tab==="schedule"  ? <Schedule  clientId={clientId} myProfile={profile} sessions={sessions} onAdd={handleAddSession} onJoin={handleJoinSession} onUpdateWorkout={handleUpdateWorkout} onLogResult={handleLogResult} />
+          : null}
       </div>
     </div>
   )
