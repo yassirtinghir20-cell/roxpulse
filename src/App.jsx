@@ -153,40 +153,104 @@ function Loading({msg="Chargement…"}) {
 }
 
 /* ══════════════════════════════════════════════════════════
-   ⏱️ TIME PICKER (drum-roll style)
+   ⏱️ TIME PICKER — scroll snap wheel
 ══════════════════════════════════════════════════════════ */
 function DrumPicker({value, onChange, max, label}) {
-  const interval = useRef(null)
-  const start = (dir) => {
-    onChange(v => Math.min(max, Math.max(0, v + dir)))
-    interval.current = setInterval(() => onChange(v => Math.min(max, Math.max(0, v + dir))), 120)
+  const listRef = useRef(null)
+  const ITEM_H  = 48
+  const VISIBLE = 5  // items visible (selected is center)
+  const PAD     = Math.floor(VISIBLE / 2) * ITEM_H
+  const isScrolling = useRef(false)
+  const scrollTimer = useRef(null)
+
+  // Sync scroll position when value changes externally
+  useEffect(() => {
+    if (!listRef.current || isScrolling.current) return
+    listRef.current.scrollTop = value * ITEM_H
+  }, [value])
+
+  const handleScroll = () => {
+    isScrolling.current = true
+    clearTimeout(scrollTimer.current)
+    scrollTimer.current = setTimeout(() => {
+      if (!listRef.current) return
+      const raw = listRef.current.scrollTop / ITEM_H
+      const snapped = Math.round(raw)
+      const clamped = Math.min(max, Math.max(0, snapped))
+      // Snap precisely
+      listRef.current.scrollTop = clamped * ITEM_H
+      onChange(clamped)
+      isScrolling.current = false
+    }, 120)
   }
-  const stop = () => clearInterval(interval.current)
-  useEffect(() => () => clearInterval(interval.current), [])
+
+  const items = Array.from({length: max + 1}, (_, i) => i)
 
   return (
-    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6,minWidth:64}}>
-      <span style={{fontSize:10,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:C.t2}}>{label}</span>
-      <button onMouseDown={()=>start(1)} onMouseUp={stop} onMouseLeave={stop} onTouchStart={()=>start(1)} onTouchEnd={stop}
-        style={{background:C.c2,border:`1px solid ${C.bd}`,borderRadius:8,width:52,height:34,cursor:"pointer",color:C.t1,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center"}}>
-        ▲
-      </button>
-      <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:32,fontWeight:700,color:C.orange,width:64,textAlign:"center",background:C.c2,borderRadius:10,padding:"8px 0",border:`1px solid ${C.bd}`}}>
-        {String(value).padStart(2,"0")}
+    <div style={{display:"flex", flexDirection:"column", alignItems:"center", gap:8, userSelect:"none"}}>
+      <span style={{fontSize:10, fontWeight:700, letterSpacing:"1.5px", textTransform:"uppercase", color:C.t2}}>{label}</span>
+
+      <div style={{position:"relative", width:72, height:ITEM_H * VISIBLE}}>
+        {/* Top & bottom fade overlays */}
+        <div style={{position:"absolute",top:0,left:0,right:0,height:PAD,background:`linear-gradient(${C.c2},transparent)`,zIndex:2,pointerEvents:"none",borderRadius:"12px 12px 0 0"}}/>
+        <div style={{position:"absolute",bottom:0,left:0,right:0,height:PAD,background:`linear-gradient(transparent,${C.c2})`,zIndex:2,pointerEvents:"none",borderRadius:"0 0 12px 12px"}}/>
+
+        {/* Selection highlight */}
+        <div style={{position:"absolute",top:"50%",left:4,right:4,height:ITEM_H,transform:"translateY(-50%)",background:C.orange+"18",border:`1.5px solid ${C.orange}55`,borderRadius:10,zIndex:1,pointerEvents:"none"}}/>
+
+        {/* Scrollable list */}
+        <div
+          ref={listRef}
+          onScroll={handleScroll}
+          style={{
+            height:"100%",
+            overflowY:"scroll",
+            scrollSnapType:"y mandatory",
+            background:C.c2,
+            borderRadius:12,
+            border:`1px solid ${C.bd}`,
+            scrollbarWidth:"none",
+            msOverflowStyle:"none",
+          }}
+        >
+          <style>{`.drum-hide::-webkit-scrollbar{display:none}`}</style>
+          {/* top padding */}
+          <div style={{height:PAD, flexShrink:0}}/>
+          {items.map(i => (
+            <div
+              key={i}
+              onClick={() => { onChange(i); if(listRef.current) listRef.current.scrollTop = i * ITEM_H }}
+              style={{
+                height:ITEM_H,
+                scrollSnapAlign:"center",
+                display:"flex",
+                alignItems:"center",
+                justifyContent:"center",
+                fontFamily:"'JetBrains Mono',monospace",
+                fontSize:26,
+                fontWeight:700,
+                color: i === value ? C.orange : C.t3,
+                cursor:"pointer",
+                transition:"color 0.1s",
+                flexShrink:0,
+              }}
+            >
+              {String(i).padStart(2,"0")}
+            </div>
+          ))}
+          {/* bottom padding */}
+          <div style={{height:PAD, flexShrink:0}}/>
+        </div>
       </div>
-      <button onMouseDown={()=>start(-1)} onMouseUp={stop} onMouseLeave={stop} onTouchStart={()=>start(-1)} onTouchEnd={stop}
-        style={{background:C.c2,border:`1px solid ${C.bd}`,borderRadius:8,width:52,height:34,cursor:"pointer",color:C.t1,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center"}}>
-        ▼
-      </button>
     </div>
   )
 }
 
 function TimePicker({minutes, seconds, onMinutes, onSeconds}) {
   return (
-    <div style={{display:"flex",alignItems:"center",gap:12,justifyContent:"center",padding:"8px 0"}}>
+    <div style={{display:"flex", alignItems:"center", gap:16, justifyContent:"center", padding:"8px 0"}}>
       <DrumPicker value={minutes} onChange={onMinutes} max={99} label="min" />
-      <div style={{fontSize:32,fontWeight:700,color:C.t2,marginTop:16}}>:</div>
+      <div style={{fontSize:36, fontWeight:700, color:C.t2, marginTop:20, flexShrink:0}}>:</div>
       <DrumPicker value={seconds} onChange={onSeconds} max={59} label="sec" />
     </div>
   )
