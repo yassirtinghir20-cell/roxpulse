@@ -1,48 +1,93 @@
-import { useState, useEffect, useMemo } from "react"
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, RadarChart, Radar, PolarGrid, PolarAngleAxis, CartesianGrid } from "recharts"
-import { getStoredClientId, setStoredClientId, clearStoredSession, db } from "./db"
+import { useState, useEffect, useMemo, useRef, useCallback } from "react"
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts"
+import { getStoredClientId, clearStoredSession, db } from "./db"
 import { supabase } from "./supabase"
 
-/* ── TOKENS ─────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   TOKENS
+══════════════════════════════════════════════════════════ */
 const C = {
   orange:"#FF4700", amber:"#FFB300", green:"#00C853", red:"#FF1744",
+  blue:"#448AFF", purple:"#9C27B0",
   bg:"#080808", c1:"#111111", c2:"#191919", c3:"#222222",
   bd:"#2A2A2A", t1:"#F0F0F0", t2:"#888888", t3:"#3A3A3A",
 }
 
-/* ── DONNÉES ─────────────────────────────────────────────── */
-const STATIONS = [
-  {id:"skierg",    name:"SkiErg",        sub:"1000m"},
-  {id:"sled_push", name:"Sled Push",     sub:"50m"},
-  {id:"sled_pull", name:"Sled Pull",     sub:"50m"},
-  {id:"burpee",    name:"Burpee B.J.",   sub:"80m"},
-  {id:"rowing",    name:"Rowing",        sub:"1000m"},
-  {id:"farmers",   name:"Farmers Carry", sub:"200m"},
-  {id:"lunges",    name:"S. Lunges",     sub:"100m"},
-  {id:"wallballs", name:"Wall Balls",    sub:"75 reps"},
+/* ══════════════════════════════════════════════════════════
+   CONSTANTES
+══════════════════════════════════════════════════════════ */
+const SPORT_EMOJIS = [
+  "🏃","🚴","🏋️","💪","🎯","⚡","🔥","🦁","🐯","🦅",
+  "🏊","⛷️","🚣","🤸","🥊","🎽","🏅","⚔️","🌊","🌪️",
+  "💎","👑","🦊","🐺","🦈","🐉","⚡","🌟","🔱","🏆"
 ]
-const AVATAR_COLORS = ["#FF4700","#FF6B9D","#00BFA5","#448AFF","#9C27B0","#FFB300","#00E676","#E91E63"]
-const CATEGORIES    = ["Débutant","Niveau moyen","Avancé"]
-const SESSION_TYPES = ["Simulation complète","Stations uniquement","Running + Stations","Force & Endurance"]
-const LEVELS        = ["Tous niveaux","Débutant","Niveau moyen","Avancé"]
-const CAT_COLOR     = {"Débutant":C.green,"Niveau moyen":C.amber,"Avancé":C.orange}
-const VILLES        = ["Casablanca","Rabat","Fès","Marrakech","Tanger","Agadir","Meknès","Oujda","Kénitra","Tétouan","Salé","Safi","El Jadida","Nador","Béni Mellal","Mohammadia","Settat","Khouribga","Laâyoune","Dakhla"]
 
-/* ── HELPERS ─────────────────────────────────────────────── */
+const BLOCK_TYPES = [
+  {id:"run",   icon:"🏃", label:"Course"},
+  {id:"row",   icon:"🚣", label:"Rameur"},
+  {id:"ski",   icon:"⛷️", label:"SkiErg"},
+  {id:"sled",  icon:"🛷", label:"Sled"},
+  {id:"carry", icon:"💪", label:"Carry"},
+  {id:"jump",  icon:"🦘", label:"Sauts"},
+  {id:"wall",  icon:"🧱", label:"Wall Balls"},
+  {id:"bike",  icon:"🚴", label:"Vélo"},
+  {id:"custom",icon:"⚡", label:"Autre"},
+]
+
+const INTENSITIES = [
+  {id:"low",  label:"Léger",   color:C.green,  mult:1.0},
+  {id:"med",  label:"Modéré",  color:C.amber,  mult:1.3},
+  {id:"high", label:"Intense", color:C.orange, mult:1.6},
+]
+
+const LEVELS_DEF = [
+  {name:"Rookie",     icon:"🌱", min:0,  max:20,  color:C.t2},
+  {name:"Challenger", icon:"⚡", min:21, max:40,  color:C.green},
+  {name:"Athlete",    icon:"🔥", min:41, max:60,  color:C.amber},
+  {name:"Elite",      icon:"💎", min:61, max:80,  color:C.blue},
+  {name:"HYROX Pro",  icon:"👑", min:81, max:100, color:C.orange},
+]
+
+const BIO_OBJECTIVES = [
+  "Finir ma première HYROX","Passer sous 1h30","Passer sous 1h",
+  "Perdre du poids","Améliorer mon cardio","Me dépasser chaque session",
+  "Progresser régulièrement","Participer en équipe",
+]
+
+const SESSION_TYPES = ["Simulation complète","Force & Cardio","Running focus","Circuit libre"]
+const LEVELS_SESSION = ["Tous niveaux","Rookie","Athlete","Elite","HYROX Pro"]
+const VILLES = ["Casablanca","Rabat","Fès","Marrakech","Tanger","Agadir","Meknès","Oujda","Kénitra","Tétouan","Salé","Safi","El Jadida","Nador","Béni Mellal","Mohammadia","Settat","Khouribga","Laâyoune","Dakhla"]
+
+/* ══════════════════════════════════════════════════════════
+   HELPERS
+══════════════════════════════════════════════════════════ */
 const fmt = (s) => {
-  if (!s) return "--:--"
+  if (!s && s !== 0) return "--:--"
   const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60
   return h>0 ? `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}` : `${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`
 }
-const parseT = (str) => {
-  if (!str) return 0
-  const p=str.split(":").map(Number)
-  return p.length===3 ? p[0]*3600+p[1]*60+p[2] : (p[0]||0)*60+(p[1]||0)
-}
 const fmtDate  = (ts) => new Date(ts).toLocaleDateString("fr-FR",{day:"2-digit",month:"short",year:"numeric"})
 const fmtShort = (ts) => new Date(ts).toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})
+const timeAgo  = (ts) => {
+  const d = (Date.now()-ts)/1000
+  if (d<60) return "à l'instant"
+  if (d<3600) return `${Math.floor(d/60)}min`
+  if (d<86400) return `${Math.floor(d/3600)}h`
+  return fmtShort(ts)
+}
 
-/* ── 🏆 ROX SCORE ────────────────────────────────────────── */
+const getLevel = (rox) => LEVELS_DEF.findLast(l => rox >= l.min) || LEVELS_DEF[0]
+
+const calcEffortScore = (blocks=[]) => {
+  if (!blocks.length) return 0
+  const multMap = {low:1.0, med:1.3, high:1.6}
+  const total = blocks.reduce((s,b) => {
+    const secs = (b.minutes||0)*60 + (b.seconds||0)
+    return s + secs * (multMap[b.intensity]||1.0)
+  }, 0)
+  return Math.round(total / 60)
+}
+
 const computeROX = (workouts) => {
   if (!workouts.length) return 0
   const sorted = [...workouts].sort((a,b) => a.date - b.date)
@@ -50,113 +95,149 @@ const computeROX = (workouts) => {
   const recent = sorted.slice(-5)
   let imp = 0
   if (recent.length >= 2) {
-    const worst = Math.max(...recent.map(w=>w.total_time))
-    const best  = Math.min(...recent.map(w=>w.total_time))
-    imp = Math.min(35, Math.round(((worst-best)/worst)*220))
+    const scores = recent.map(w => w.effort_score || 0).filter(Boolean)
+    if (scores.length >= 2) {
+      const best = Math.max(...scores), worst = Math.min(...scores)
+      imp = Math.min(35, Math.round(((best-worst)/Math.max(best,1))*220))
+    }
   }
   let cons = 0
   if (sorted.length >= 2) {
     const spanW = (sorted[sorted.length-1].date - sorted[0].date)/(7*24*3600*1000)
     cons = Math.min(25, Math.round((workouts.length/Math.max(1,spanW))*12))
   }
-  let bal = 8
-  const last = sorted[sorted.length-1]
-  if (last?.stations) {
-    const vals = Object.values(last.stations).filter(v=>v>0)
-    if (vals.length >= 4) {
-      const avg = vals.reduce((a,b)=>a+b,0)/vals.length
-      bal = Math.round(Math.max(0, 15*(1-Math.max(...vals.map(v=>Math.abs(v-avg)/avg)))))
-    }
-  }
-  return Math.min(100, Math.round(vol+imp+cons+bal))
+  return Math.min(100, Math.round(vol+imp+cons+8))
 }
 
-/* ── 🎖️ BADGE SYSTEM ─────────────────────────────────────── */
-const BADGE_DEFS = [
-  {id:"first",    icon:"🌟",name:"Premier Pas",   rarity:"common",   unlock:w=>w.length>=1,          desc:"Première session enregistrée"},
-  {id:"regular",  icon:"🔁",name:"Régulier",      rarity:"common",   unlock:w=>w.length>=5,          desc:"5 sessions complétées"},
-  {id:"machine",  icon:"⚙️", name:"Machine",      rarity:"uncommon", unlock:w=>w.length>=10,         desc:"10 sessions complétées"},
-  {id:"sub60",    icon:"⚡",name:"Sub-60",         rarity:"rare",     unlock:w=>w.some(s=>s.total_time<3600), desc:"Terminer en moins d'1h"},
-  {id:"skierg",   icon:"🎿",name:"SkiErg King",   rarity:"uncommon", unlock:w=>w.some(s=>s.stations?.skierg&&s.stations.skierg<210), desc:"SkiErg sous 3:30"},
-  {id:"rowing",   icon:"🚣",name:"Rameur Elite",  rarity:"uncommon", unlock:w=>w.some(s=>s.stations?.rowing&&s.stations.rowing<240), desc:"Rowing sous 4:00"},
-  {id:"allround", icon:"⚖️",name:"All-Rounder",  rarity:"uncommon", unlock:w=>w.some(s=>Object.keys(s.stations||{}).filter(k=>s.stations[k]>0).length>=7), desc:"7 stations actives"},
-  {id:"ironweek", icon:"🗓️",name:"Iron Week",    rarity:"rare",     unlock:w=>{const byW={};w.forEach(s=>{const k=Math.floor(s.date/(7*24*3600*1000));byW[k]=(byW[k]||0)+1});return Object.values(byW).some(c=>c>=3)}, desc:"3 sessions en 7 jours"},
-  {id:"warrior",  icon:"🏆",name:"HYROX Warrior", rarity:"legendary",unlock:w=>w.length>=20&&w.some(s=>s.total_time<3600), desc:"20 sessions + PR sub-60"},
-]
-const RARITY_COL  = {common:C.t2, uncommon:C.green, rare:C.amber, legendary:C.orange}
-const computeBadges = (workouts) => BADGE_DEFS.map(b=>({...b, earned:b.unlock(workouts)}))
-
-/* ── STYLES ──────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   STYLES
+══════════════════════════════════════════════════════════ */
 const S = {
   card:    {background:C.c1, border:`1px solid ${C.bd}`, borderRadius:12},
-  btn:     {background:C.orange, color:"#fff", border:"none", borderRadius:8, padding:"10px 20px", fontWeight:700, cursor:"pointer", fontSize:13, fontFamily:"inherit", letterSpacing:"0.5px", textTransform:"uppercase"},
+  btn:     {background:C.orange, color:"#fff", border:"none", borderRadius:8, padding:"10px 20px", fontWeight:700, cursor:"pointer", fontSize:13, fontFamily:"inherit", letterSpacing:"0.5px"},
   btnGhost:{background:"transparent", color:C.t1, border:`1px solid ${C.bd}`, borderRadius:8, padding:"9px 18px", fontWeight:600, cursor:"pointer", fontSize:13, fontFamily:"inherit"},
-  input:   {background:C.c3, border:`1px solid ${C.bd}`, borderRadius:8, padding:"10px 14px", color:C.t1, fontSize:13, fontFamily:"'JetBrains Mono',monospace", outline:"none", width:"100%", boxSizing:"border-box"},
+  input:   {background:C.c3, border:`1px solid ${C.bd}`, borderRadius:8, padding:"10px 14px", color:C.t1, fontSize:13, fontFamily:"inherit", outline:"none", width:"100%", boxSizing:"border-box"},
   label:   {fontSize:11, fontWeight:700, letterSpacing:"1.5px", textTransform:"uppercase", color:C.t2, display:"block", marginBottom:6},
-  tag:     (col) => ({background:col+"22", color:col, border:`1px solid ${col}44`, borderRadius:4, padding:"2px 8px", fontSize:11, fontWeight:700, letterSpacing:"0.5px", whiteSpace:"nowrap"}),
+  tag:     (col) => ({background:col+"22", color:col, border:`1px solid ${col}44`, borderRadius:4, padding:"2px 8px", fontSize:11, fontWeight:700, whiteSpace:"nowrap"}),
 }
 
-/* ── COMPOSANTS UTILITAIRES ──────────────────────────────── */
-function Avatar({name, color, size=36}) {
-  const ini = name.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2)
-  return <div style={{width:size,height:size,borderRadius:"50%",background:color,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:size*0.35,color:"#fff",flexShrink:0}}>{ini}</div>
+/* ══════════════════════════════════════════════════════════
+   BASE COMPONENTS
+══════════════════════════════════════════════════════════ */
+function Avatar({emoji, color, name, size=40}) {
+  const display = emoji || (name ? name.slice(0,2).toUpperCase() : "?")
+  return (
+    <div style={{width:size, height:size, borderRadius:"50%", background:color||C.c3, display:"flex", alignItems:"center", justifyContent:"center", fontSize:emoji?size*0.5:size*0.32, color:"#fff", fontWeight:700, flexShrink:0, border:`2px solid ${C.bd}`}}>
+      {display}
+    </div>
+  )
 }
 
 function StatCard({label, value, sub, accent}) {
   return (
-    <div style={{...S.card, padding:"20px 22px"}}>
-      <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:8}}>{label}</div>
-      <div style={{fontSize:30,fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif",color:accent||C.t1,letterSpacing:"-0.5px",lineHeight:1.1}}>{value}</div>
-      {sub && <div style={{fontSize:12,color:C.t2,marginTop:4}}>{sub}</div>}
+    <div style={{...S.card, padding:"18px 20px"}}>
+      <div style={{fontSize:10,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:8}}>{label}</div>
+      <div style={{fontSize:28,fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif",color:accent||C.t1,letterSpacing:"-0.5px",lineHeight:1.1}}>{value}</div>
+      {sub && <div style={{fontSize:11,color:C.t2,marginTop:4}}>{sub}</div>}
     </div>
   )
 }
 
-const Toggle = ({on, onClick}) => (
-  <div onClick={onClick} style={{width:36,height:20,borderRadius:10,background:on?C.orange:C.c3,border:`1px solid ${on?C.orange:C.bd}`,cursor:"pointer",position:"relative",transition:"background 0.2s",flexShrink:0}}>
-    <div style={{position:"absolute",top:2,left:on?18:2,width:14,height:14,borderRadius:"50%",background:"#fff",transition:"left 0.2s"}} />
-  </div>
-)
-
-const ChartTip = ({active, payload, label}) => {
-  if (!active||!payload?.length) return null
-  return (
-    <div style={{background:C.c2,border:`1px solid ${C.bd}`,borderRadius:8,padding:"8px 14px"}}>
-      <div style={{fontSize:12,color:C.t2,marginBottom:4}}>{label}</div>
-      {payload.map((p,i)=><div key={i} style={{fontSize:14,fontWeight:600,color:p.color}}>{p.name}: {p.value} min</div>)}
-    </div>
-  )
-}
-
-/* ── LOADING ─────────────────────────────────────────────── */
 function Loading({msg="Chargement…"}) {
   return (
-    <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12,fontFamily:"'Barlow Condensed',sans-serif"}}>
-      <div style={{fontSize:52,fontWeight:900,letterSpacing:"-2px",color:C.orange}}>ROXPULSE</div>
-      <div style={{color:C.t2,fontSize:13,fontFamily:"'Barlow',sans-serif"}}>{msg}</div>
+    <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12,fontFamily:"sans-serif"}}>
+      <div style={{fontSize:52,fontWeight:900,letterSpacing:"-2px",color:C.orange,fontFamily:"'Barlow Condensed',sans-serif"}}>ROXPULSE</div>
+      <div style={{color:C.t2,fontSize:13}}>{msg}</div>
     </div>
   )
 }
 
-/* ── AUTH (Login + Signup) ───────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   ⏱️ TIME PICKER (drum-roll style)
+══════════════════════════════════════════════════════════ */
+function DrumPicker({value, onChange, max, label}) {
+  const interval = useRef(null)
+  const start = (dir) => {
+    onChange(v => Math.min(max, Math.max(0, v + dir)))
+    interval.current = setInterval(() => onChange(v => Math.min(max, Math.max(0, v + dir))), 120)
+  }
+  const stop = () => clearInterval(interval.current)
+  useEffect(() => () => clearInterval(interval.current), [])
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6,minWidth:64}}>
+      <span style={{fontSize:10,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:C.t2}}>{label}</span>
+      <button onMouseDown={()=>start(1)} onMouseUp={stop} onMouseLeave={stop} onTouchStart={()=>start(1)} onTouchEnd={stop}
+        style={{background:C.c2,border:`1px solid ${C.bd}`,borderRadius:8,width:52,height:34,cursor:"pointer",color:C.t1,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center"}}>
+        ▲
+      </button>
+      <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:32,fontWeight:700,color:C.orange,width:64,textAlign:"center",background:C.c2,borderRadius:10,padding:"8px 0",border:`1px solid ${C.bd}`}}>
+        {String(value).padStart(2,"0")}
+      </div>
+      <button onMouseDown={()=>start(-1)} onMouseUp={stop} onMouseLeave={stop} onTouchStart={()=>start(-1)} onTouchEnd={stop}
+        style={{background:C.c2,border:`1px solid ${C.bd}`,borderRadius:8,width:52,height:34,cursor:"pointer",color:C.t1,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center"}}>
+        ▼
+      </button>
+    </div>
+  )
+}
+
+function TimePicker({minutes, seconds, onMinutes, onSeconds}) {
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:12,justifyContent:"center",padding:"8px 0"}}>
+      <DrumPicker value={minutes} onChange={onMinutes} max={99} label="min" />
+      <div style={{fontSize:32,fontWeight:700,color:C.t2,marginTop:16}}>:</div>
+      <DrumPicker value={seconds} onChange={onSeconds} max={59} label="sec" />
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════
+   🎨 EMOJI PICKER
+══════════════════════════════════════════════════════════ */
+function EmojiPicker({selected, onSelect, color, onColor}) {
+  const COLORS = ["#FF4700","#FF6B9D","#00BFA5","#448AFF","#9C27B0","#FFB300","#00E676","#E91E63","#FF8C00","#00BCD4"]
+  return (
+    <div>
+      <label style={S.label}>Avatar</label>
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
+        {SPORT_EMOJIS.map(e => (
+          <div key={e} onClick={()=>onSelect(e)} style={{width:40,height:40,borderRadius:10,background:selected===e?C.orange+"22":C.c2,border:`2px solid ${selected===e?C.orange:C.bd}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,cursor:"pointer",transition:"all 0.1s"}}>
+            {e}
+          </div>
+        ))}
+      </div>
+      <label style={{...S.label, marginTop:8}}>Couleur de fond</label>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        {COLORS.map(c => (
+          <div key={c} onClick={()=>onColor(c)} style={{width:30,height:30,borderRadius:"50%",background:c,cursor:"pointer",border:color===c?"3px solid white":"3px solid transparent",transition:"border 0.1s"}} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════
+   🔐 AUTH
+══════════════════════════════════════════════════════════ */
 function Auth({onAuth}) {
   const [mode,     setMode]     = useState("login")
   const [name,     setName]     = useState("")
   const [password, setPassword] = useState("")
   const [confirm,  setConfirm]  = useState("")
   const [city,     setCity]     = useState("")
-  const [category, setCategory] = useState("Débutant")
-  const [color,    setColor]    = useState(AVATAR_COLORS[0])
+  const [emoji,    setEmoji]    = useState("🏃")
+  const [color,    setColor]    = useState("#FF4700")
   const [error,    setError]    = useState("")
   const [loading,  setLoading]  = useState(false)
 
   const submit = async () => {
     setError(""); setLoading(true)
-    if (!name.trim() || !password) { setError("Remplis tous les champs."); setLoading(false); return }
-    if (mode === "signup") {
-      if (password !== confirm) { setError("Les mots de passe ne correspondent pas."); setLoading(false); return }
-      if (password.length < 6)  { setError("Mot de passe trop court (min 6 caractères)."); setLoading(false); return }
-      const res = await db.signup({name:name.trim(), city, category, color}, password)
+    if (!name.trim()||!password) { setError("Remplis tous les champs."); setLoading(false); return }
+    if (mode==="signup") {
+      if (password!==confirm) { setError("Mots de passe différents."); setLoading(false); return }
+      if (password.length<6)  { setError("Min 6 caractères."); setLoading(false); return }
+      const res = await db.signup({name:name.trim(), city, color, avatar_emoji:emoji}, password)
       if (res.error) { setError(res.error); setLoading(false); return }
       onAuth(res.data, res.clientId)
     } else {
@@ -168,76 +249,56 @@ function Auth({onAuth}) {
   }
 
   return (
-    <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Barlow',sans-serif",color:C.t1}}>
+    <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"sans-serif",color:C.t1}}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;900&family=Barlow+Condensed:wght@700;900&family=JetBrains+Mono:wght@400;600&display=swap');*{box-sizing:border-box}`}</style>
-      <div style={{...S.card, maxWidth:460, width:"100%", padding:"44px 36px"}}>
+      <div style={{...S.card, maxWidth:480, width:"100%", padding:"40px 32px"}}>
         <div style={{textAlign:"center", marginBottom:28}}>
-          <div style={{fontFamily:"'Barlow Condensed',sans-serif", fontSize:44, fontWeight:900, letterSpacing:"-2px", color:C.orange}}>ROXPULSE</div>
-          <div style={{color:C.t2, marginTop:6, fontSize:14}}>
-            {mode==="login" ? "Connecte-toi à ton compte" : "Crée ton profil et rejoins la communauté"}
-          </div>
+          <div style={{fontFamily:"'Barlow Condensed',sans-serif", fontSize:42, fontWeight:900, letterSpacing:"-2px", color:C.orange}}>ROXPULSE</div>
+          <div style={{color:C.t2, marginTop:4, fontSize:13}}>{mode==="login"?"Connecte-toi":"Rejoins la communauté"}</div>
         </div>
 
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:0,background:C.c3,borderRadius:10,padding:4,marginBottom:24}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",background:C.c3,borderRadius:10,padding:4,marginBottom:24}}>
           {[["login","Se connecter"],["signup","Créer un compte"]].map(([m,l])=>(
-            <button key={m} onClick={()=>{setMode(m);setError("")}} style={{background:mode===m?C.c1:"transparent",color:mode===m?C.t1:C.t2,border:`1px solid ${mode===m?C.bd:"transparent"}`,borderRadius:8,padding:"8px 0",cursor:"pointer",fontWeight:mode===m?700:500,fontSize:13,fontFamily:"inherit",transition:"all 0.15s"}}>
+            <button key={m} onClick={()=>{setMode(m);setError("")}} style={{background:mode===m?C.c1:"transparent",color:mode===m?C.t1:C.t2,border:`1px solid ${mode===m?C.bd:"transparent"}`,borderRadius:8,padding:"8px 0",cursor:"pointer",fontWeight:mode===m?700:400,fontSize:13,fontFamily:"inherit"}}>
               {l}
             </button>
           ))}
         </div>
 
-        <div style={{display:"flex", flexDirection:"column", gap:16}}>
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <div>
-            <label style={S.label}>Pseudo / Nom</label>
-            <input style={S.input} value={name} onChange={e=>setName(e.target.value)} placeholder="Ex: Omar Idrissi" onKeyDown={e=>e.key==="Enter"&&submit()}/>
+            <label style={S.label}>Pseudo</label>
+            <input style={S.input} value={name} onChange={e=>setName(e.target.value)} placeholder="Ex: Omar" onKeyDown={e=>e.key==="Enter"&&submit()}/>
           </div>
 
-          {mode==="signup" && (<>
-            <div>
-              <label style={S.label}>Ville</label>
-              <select style={{...S.input, cursor:"pointer", appearance:"none", backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`, backgroundRepeat:"no-repeat", backgroundPosition:"right 14px center"}} value={city} onChange={e=>setCity(e.target.value)}>
-                <option value="">— Choisir une ville —</option>
-                {VILLES.map(v=><option key={v}>{v}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={S.label}>Niveau</label>
-              <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8}}>
-                {CATEGORIES.map(cat=>(
-                  <button key={cat} onClick={()=>setCategory(cat)} style={{background:category===cat?C.orange+"22":"transparent", border:`2px solid ${category===cat?C.orange:C.bd}`, borderRadius:8, padding:10, cursor:"pointer", color:category===cat?C.orange:C.t2, fontWeight:700, fontSize:12, fontFamily:"inherit"}}>
-                    {cat}
-                  </button>
-                ))}
+          {mode==="signup" && (
+            <>
+              <div>
+                <label style={S.label}>Ville</label>
+                <select style={{...S.input,cursor:"pointer",appearance:"none"}} value={city} onChange={e=>setCity(e.target.value)}>
+                  <option value="">— Choisir —</option>
+                  {VILLES.map(v=><option key={v}>{v}</option>)}
+                </select>
               </div>
-            </div>
-            <div>
-              <label style={S.label}>Couleur avatar</label>
-              <div style={{display:"flex", gap:10, flexWrap:"wrap"}}>
-                {AVATAR_COLORS.map(col=><div key={col} onClick={()=>setColor(col)} style={{width:34,height:34,borderRadius:"50%",background:col,cursor:"pointer",border:color===col?"3px solid white":"3px solid transparent"}}/>)}
-              </div>
-            </div>
-          </>)}
+              <EmojiPicker selected={emoji} onSelect={setEmoji} color={color} onColor={setColor}/>
+            </>
+          )}
 
           <div>
             <label style={S.label}>Mot de passe</label>
             <input type="password" style={S.input} value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" onKeyDown={e=>e.key==="Enter"&&submit()}/>
           </div>
-
           {mode==="signup" && (
             <div>
-              <label style={S.label}>Confirmer le mot de passe</label>
+              <label style={S.label}>Confirmer</label>
               <input type="password" style={S.input} value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="••••••••" onKeyDown={e=>e.key==="Enter"&&submit()}/>
             </div>
           )}
 
-          {error && (
-            <div style={{background:C.red+"11",border:`1px solid ${C.red}33`,borderRadius:8,padding:"10px 14px",fontSize:13,color:C.red,fontWeight:500}}>
-              ⚠️ {error}
-            </div>
-          )}
+          {error && <div style={{background:C.red+"11",border:`1px solid ${C.red}33`,borderRadius:8,padding:"10px 14px",fontSize:13,color:C.red}}>⚠️ {error}</div>}
 
-          <button disabled={loading} style={{...S.btn, width:"100%", padding:"14px", fontSize:14, marginTop:4, opacity:loading?0.5:1}} onClick={submit}>
-            {loading ? "..." : mode==="login" ? "Se connecter →" : "Créer mon compte →"}
+          <button disabled={loading} style={{...S.btn,width:"100%",padding:"14px",fontSize:14,marginTop:4,opacity:loading?0.5:1}} onClick={submit}>
+            {loading?"…":mode==="login"?"Se connecter →":"Créer mon compte →"}
           </button>
         </div>
       </div>
@@ -245,528 +306,372 @@ function Auth({onAuth}) {
   )
 }
 
-/* ── 🏆 ROX METER ────────────────────────────────────────── */
-function RoxMeter({score}) {
-  const tier  = score>=80?"Légende":score>=60?"Elite":score>=40?"Pro":score>=20?"Confirmé":"Rookie"
-  const color = score>=80?C.orange:score>=60?"#FF1744":score>=40?C.amber:score>=20?C.green:"#888"
-  return (
-    <div style={{...S.card, padding:"20px 22px", position:"relative", overflow:"hidden"}}>
-      <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:`linear-gradient(90deg,${color},${color}44)`}}/>
-      <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:12}}>🏆 ROX Score™</div>
-      <div style={{display:"flex",alignItems:"flex-end",gap:12,marginBottom:14}}>
-        <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:58,fontWeight:900,color,letterSpacing:"-2px",lineHeight:1}}>{score}</div>
-        <div style={{marginBottom:10}}>
-          <div style={{background:color+"22",color,border:`1px solid ${color}44`,borderRadius:4,padding:"2px 8px",fontSize:12,fontWeight:700,display:"inline-block"}}>{tier}</div>
-          <div style={{fontSize:11,color:C.t2,marginTop:4}}>/ 100 pts</div>
-        </div>
-      </div>
-      <div style={{background:C.c3,borderRadius:20,height:6,overflow:"hidden"}}>
-        <div style={{width:`${score}%`,height:"100%",background:`linear-gradient(90deg,${color}88,${color})`,borderRadius:20,transition:"width 0.8s ease"}}/>
-      </div>
-      <div style={{display:"flex",justifyContent:"space-between",marginTop:8,fontSize:10,color:C.t3}}>
-        <span>Volume</span><span>Progression</span><span>Régularité</span><span>Équilibre</span>
-      </div>
-    </div>
-  )
-}
-
-/* ── 👻 GHOST RUNNER ─────────────────────────────────────── */
-function GhostRunner({workouts, vals, runningVal, activeStationIds}) {
-  const ghost = useMemo(()=>{
-    if (!workouts.length) return null
-    return [...workouts].sort((a,b)=>a.total_time-b.total_time)[0]
-  }, [workouts])
-  if (!ghost?.stations) return null
-
-  const rows = STATIONS.filter(s=>activeStationIds.includes(s.id)).map(s => {
-    const g = ghost.stations[s.id]||0
-    const me = parseT(vals[s.id])
-    const diff = me&&g ? me-g : null
-    return {...s, g, me, diff}
-  })
-  const ghostRun = ghost.running||0
-  const myRun    = parseT(runningVal)
-  const runDiff  = myRun&&ghostRun ? myRun-ghostRun : null
-
-  const totalMe    = rows.reduce((a,r)=>a+(r.me||0),0)+(myRun||0)
-  const totalGhost = rows.reduce((a,r)=>a+(r.g||0),0)+(ghostRun||0)
-  const totalDiff  = totalMe&&totalGhost ? totalMe-totalGhost : null
-
-  const DiffBadge = ({d}) => d===null ? null : (
-    <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,fontWeight:700,color:d<0?C.green:C.red,minWidth:60}}>
-      {d<0?`-${fmt(-d)}`:`+${fmt(d)}`}
-    </span>
-  )
+/* ══════════════════════════════════════════════════════════
+   🏋️ WORKOUT BLOCK
+══════════════════════════════════════════════════════════ */
+function BlockCard({block, onChange, onRemove, idx}) {
+  const [open, setOpen] = useState(idx===0)
+  const type = BLOCK_TYPES.find(t=>t.id===block.type)||BLOCK_TYPES[0]
+  const intensity = INTENSITIES.find(i=>i.id===block.intensity)||INTENSITIES[1]
+  const totalSecs = (block.minutes||0)*60+(block.seconds||0)
 
   return (
-    <div style={{...S.card,padding:"18px 20px"}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
-        <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>👻 Ghost Runner</div>
-        <div style={{fontSize:12,color:C.t2}}>
-          vs PR du {fmtDate(ghost.date)} —&nbsp;
-          <span style={{color:C.orange,fontWeight:700,fontFamily:"'JetBrains Mono',monospace"}}>{fmt(ghost.total_time)}</span>
-        </div>
-      </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"1fr 70px 70px 70px",gap:4,marginBottom:8}}>
-        <div style={{fontSize:10,color:C.t3,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px"}}>Station</div>
-        <div style={{fontSize:10,color:C.t3,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px",textAlign:"center"}}>👻 Ghost</div>
-        <div style={{fontSize:10,color:C.t3,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px",textAlign:"center"}}>Moi</div>
-        <div style={{fontSize:10,color:C.t3,fontWeight:700,textTransform:"uppercase",letterSpacing:"1px",textAlign:"center"}}>Écart</div>
-      </div>
-
-      {ghostRun>0&&(
-        <div style={{display:"grid",gridTemplateColumns:"1fr 70px 70px 70px",gap:4,padding:"6px 0",borderBottom:`1px solid ${C.bd}`,alignItems:"center"}}>
-          <span style={{fontSize:12,color:C.t2}}>🏃 Running</span>
-          <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:C.t3,textAlign:"center"}}>{fmt(ghostRun)}</span>
-          <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:C.t1,textAlign:"center"}}>{myRun?fmt(myRun):"--"}</span>
-          <div style={{textAlign:"center"}}><DiffBadge d={runDiff}/></div>
-        </div>
-      )}
-
-      {rows.map((r,i)=>(
-        <div key={r.id} style={{display:"grid",gridTemplateColumns:"1fr 70px 70px 70px",gap:4,padding:"6px 0",borderBottom:i<rows.length-1?`1px solid ${C.bd}`:"none",alignItems:"center"}}>
-          <span style={{fontSize:12,color:C.t2}}>{r.name}</span>
-          <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:C.t3,textAlign:"center"}}>{r.g?fmt(r.g):"--"}</span>
-          <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:C.t1,textAlign:"center"}}>{r.me?fmt(r.me):"--"}</span>
-          <div style={{textAlign:"center"}}><DiffBadge d={r.diff}/></div>
-        </div>
-      ))}
-
-      {totalDiff!==null&&(
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:12,padding:"10px 14px",background:totalDiff<0?C.green+"11":C.red+"11",borderRadius:8,border:`1px solid ${totalDiff<0?C.green:C.red}22`}}>
-          <span style={{fontSize:12,fontWeight:700,color:C.t2}}>Total vs ghost</span>
-          <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:20,fontWeight:700,color:totalDiff<0?C.green:C.red}}>
-            {totalDiff<0?`-${fmt(-totalDiff)}`:`+${fmt(totalDiff)}`}
-          </span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/* ── DASHBOARD ───────────────────────────────────────────── */
-function Dashboard({workouts}) {
-  const sorted = [...workouts].sort((a,b)=>a.date-b.date)
-  const best   = workouts.length ? Math.min(...workouts.map(w=>w.total_time)) : null
-  const last   = sorted[sorted.length-1]
-  const prev   = sorted[sorted.length-2]
-  const improve = prev&&last ? prev.total_time - last.total_time : 0
-  const roxScore = computeROX(workouts)
-
-  const chartData = sorted.map(w=>({name:fmtShort(w.date), min:Math.round(w.total_time/60)}))
-  const lastS = last?.stations || {}
-  const radar = STATIONS.map(s=>({
-    s: s.name.replace(" B.J.","").replace("S. ","").replace(" Carry","").replace(" Balls",""),
-    score: lastS[s.id] ? Math.max(20, Math.min(100, 100 - Math.round((lastS[s.id]-130)/2.2))) : 50,
-  }))
-
-  return (
-    <div style={{display:"flex", flexDirection:"column", gap:14}}>
-      <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12}}>
-        <StatCard label="Entraînements"  value={workouts.length}      sub="sessions totales" />
-        <StatCard label="Meilleur temps" value={best?fmt(best):"--"}  sub="temps total"           accent={C.orange} />
-        <StatCard label="Progression"    value={improve>0?`-${fmt(improve)}`:"+0:00"} sub="vs session préc."  accent={C.green} />
-        <StatCard label="Points"         value={(workouts.length*180+(best?Math.round(7200/best*1000):0)).toLocaleString()} sub="classement communauté" accent={C.amber} />
-      </div>
-
-      {/* ROX Score — nouvelle ligne */}
-      <RoxMeter score={roxScore} />
-
-      <div style={{display:"grid", gridTemplateColumns:"1.6fr 1fr", gap:12}}>
-        <div style={{...S.card, padding:"20px 22px"}}>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:16}}>Évolution temps total (min)</div>
-          {chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={180}>
-              <LineChart data={chartData}>
-                <CartesianGrid stroke={C.bd} strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{fill:C.t2,fontSize:11}} axisLine={false} tickLine={false} />
-                <YAxis tick={{fill:C.t2,fontSize:11}} axisLine={false} tickLine={false} domain={["dataMin-4","dataMax+4"]} />
-                <Tooltip content={<ChartTip />} />
-                <Line type="monotone" dataKey="min" name="Temps" stroke={C.orange} strokeWidth={2.5} dot={{fill:C.orange,r:4}} activeDot={{r:6}} />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : <div style={{height:180,display:"flex",alignItems:"center",justifyContent:"center",color:C.t3,fontSize:13}}>Enregistre ta première session pour voir le graphique</div>}
-        </div>
-        <div style={{...S.card, padding:"20px 22px"}}>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:16}}>Profil stations (dernière session)</div>
-          <ResponsiveContainer width="100%" height={180}>
-            <RadarChart data={radar}>
-              <PolarGrid stroke={C.bd} />
-              <PolarAngleAxis dataKey="s" tick={{fill:C.t2,fontSize:9}} />
-              <Radar dataKey="score" stroke={C.orange} fill={C.orange} fillOpacity={0.2} strokeWidth={2} />
-            </RadarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div style={{...S.card, padding:"20px 22px"}}>
-        <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:16}}>Sessions récentes</div>
-        {[...sorted].reverse().slice(0,5).map((w,i)=>(
-          <div key={w.id} style={{display:"flex",alignItems:"center",padding:"12px 0",borderBottom:i<4?`1px solid ${C.bd}`:"none"}}>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600,fontSize:14}}>{fmtDate(w.date)}</div>
-              {w.notes && <div style={{fontSize:12,color:C.t2,marginTop:2}}>{w.notes}</div>}
-            </div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:600,fontSize:20,color:i===0?C.green:C.t1}}>{fmt(w.total_time)}</div>
-              {i===0 && <div style={{fontSize:11,color:C.green}}>Dernière session</div>}
-            </div>
+    <div style={{...S.card, overflow:"hidden"}}>
+      <div onClick={()=>setOpen(!open)} style={{display:"flex",alignItems:"center",gap:12,padding:"14px 16px",cursor:"pointer",background:open?C.c2:"transparent"}}>
+        <span style={{fontSize:24}}>{type.icon}</span>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:600,fontSize:14,color:C.t1}}>{type.label}</div>
+          <div style={{fontSize:12,color:C.t2,marginTop:2}}>
+            {totalSecs>0 ? fmt(totalSecs) : "--:--"} · <span style={{color:intensity.color}}>{intensity.label}</span>
           </div>
-        ))}
-        {!workouts.length && <div style={{textAlign:"center",color:C.t2,padding:"24px 0",fontSize:13}}>Aucune session enregistrée — vas dans l'onglet Entraînement !</div>}
+        </div>
+        <button onClick={(e)=>{e.stopPropagation();onRemove()}} style={{background:"transparent",border:"none",color:C.t3,cursor:"pointer",fontSize:18,padding:"0 4px"}}>✕</button>
+        <span style={{color:C.t2,fontSize:12}}>{open?"▲":"▼"}</span>
       </div>
+
+      {open && (
+        <div style={{padding:"16px",borderTop:`1px solid ${C.bd}`}}>
+          {/* Type selector */}
+          <label style={S.label}>Type d'exercice</label>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
+            {BLOCK_TYPES.map(t=>(
+              <button key={t.id} onClick={()=>onChange({...block,type:t.id})}
+                style={{background:block.type===t.id?C.orange+"22":"transparent",border:`2px solid ${block.type===t.id?C.orange:C.bd}`,borderRadius:8,padding:"8px 12px",cursor:"pointer",fontFamily:"inherit",color:block.type===t.id?C.orange:C.t2,fontSize:13,display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontSize:18}}>{t.icon}</span>{t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Duration */}
+          <label style={S.label}>Durée</label>
+          <div style={{background:C.c2,borderRadius:12,padding:"16px",marginBottom:16}}>
+            <TimePicker
+              minutes={block.minutes||0} seconds={block.seconds||0}
+              onMinutes={fn=>onChange({...block,minutes:typeof fn==="function"?fn(block.minutes||0):fn})}
+              onSeconds={fn=>onChange({...block,seconds:typeof fn==="function"?fn(block.seconds||0):fn})}
+            />
+          </div>
+
+          {/* Intensity */}
+          <label style={S.label}>Intensité</label>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            {INTENSITIES.map(i=>(
+              <button key={i.id} onClick={()=>onChange({...block,intensity:i.id})}
+                style={{background:block.intensity===i.id?i.color+"22":"transparent",border:`2px solid ${block.intensity===i.id?i.color:C.bd}`,borderRadius:8,padding:"10px",cursor:"pointer",fontFamily:"inherit",color:block.intensity===i.id?i.color:C.t2,fontWeight:700,fontSize:13}}>
+                {i.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-/* ── LOG WORKOUT ─────────────────────────────────────────── */
-function LogWorkout({onAdd, workouts}) {
-  const initActive = STATIONS.reduce((a,s)=>({...a,[s.id]:true}),{})
-  const initVals   = STATIONS.reduce((a,s)=>({...a,[s.id]:""}),{})
-  const initNames  = STATIONS.reduce((a,s)=>({...a,[s.id]:s.name}),{})
-  const initSubs   = STATIONS.reduce((a,s)=>({...a,[s.id]:s.sub}),{})
+/* ══════════════════════════════════════════════════════════
+   🔥 LOG WORKOUT
+══════════════════════════════════════════════════════════ */
+function LogWorkout({onAdd}) {
+  const newBlock = () => ({id:`b${Date.now()}`,type:"run",minutes:0,seconds:0,intensity:"med"})
+  const [blocks, setBlocks] = useState([newBlock()])
+  const [notes,  setNotes]  = useState("")
+  const [saved,  setSaved]  = useState(false)
+  const [saving, setSaving] = useState(false)
 
-  const [active,  setActive]  = useState(initActive)
-  const [vals,    setVals]    = useState(initVals)
-  const [names,   setNames]   = useState(initNames)
-  const [subs,    setSubs]    = useState(initSubs)
-  const [running, setRun]     = useState("")
-  const [runAct,  setRunAct]  = useState(true)
-  const [notes,   setNotes]   = useState("")
-  const [saved,   setSaved]   = useState(false)
-  const [saving,  setSaving]  = useState(false)
-  const [customs, setCustoms] = useState([])
-  const [editing, setEditing] = useState(null)
-  const [showGhost, setShowGhost] = useState(true)
+  const totalSecs = blocks.reduce((s,b)=>(s+(b.minutes||0)*60+(b.seconds||0)),0)
+  const effortScore = calcEffortScore(blocks)
 
-  const activeStationIds = STATIONS.filter(s=>active[s.id]).map(s=>s.id)
-  const addCustom = () => setCustoms(p=>[...p,{id:`cx${Date.now()}`,name:"Exercice",sub:"reps",val:"",active:true}])
-  const updCx    = (id,f,v) => setCustoms(p=>p.map(c=>c.id===id?{...c,[f]:v}:c))
-  const rmCx     = (id)     => setCustoms(p=>p.filter(c=>c.id!==id))
-
-  const stdTotal  = STATIONS.filter(s=>active[s.id]).reduce((a,s)=>a+parseT(vals[s.id]),0)
-  const cxTotal   = customs.filter(c=>c.active).reduce((a,c)=>a+parseT(c.val),0)
-  const runTotal  = runAct ? parseT(running) : 0
-  const total     = stdTotal + cxTotal + runTotal
-  const actCount  = STATIONS.filter(s=>active[s.id]).length + customs.filter(c=>c.active).length + (runAct?1:0)
-
-  const reset = () => { setActive(initActive); setVals(initVals); setNames(initNames); setSubs(initSubs); setRun(""); setRunAct(true); setNotes(""); setCustoms([]); setEditing(null) }
+  const addBlock = () => setBlocks(p=>[...p,newBlock()])
+  const updateBlock = (id,data) => setBlocks(p=>p.map(b=>b.id===id?data:b))
+  const removeBlock = (id) => setBlocks(p=>p.filter(b=>b.id!==id))
 
   const save = async () => {
-    if (!total || saving) return
+    if (!totalSecs||saving) return
     setSaving(true)
-    const st={}, meta=[]
-    STATIONS.forEach(s=>{ if(active[s.id]){ st[s.id]=parseT(vals[s.id]); meta.push({id:s.id,name:names[s.id],sub:subs[s.id]}) } })
-    customs.filter(c=>c.active).forEach(c=>{ st[c.id]=parseT(c.val); meta.push({id:c.id,name:c.name,sub:c.sub}) })
-    await onAdd({total_time:total, stations:st, station_meta:meta, running:runTotal, notes})
-    reset(); setSaving(false); setSaved(true); setTimeout(()=>setSaved(false),3000)
+    await onAdd({blocks, total_time:totalSecs, effort_score:effortScore, notes})
+    setBlocks([newBlock()]); setNotes(""); setSaving(false)
+    setSaved(true); setTimeout(()=>setSaved(false),3000)
   }
 
   return (
-    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <div>
-          <div style={{fontWeight:700,fontSize:16}}>Configurer l'entraînement</div>
-          <div style={{fontSize:12,color:C.t2,marginTop:2}}>{actCount} exercice(s) actif(s)</div>
+          <div style={{fontWeight:700,fontSize:16}}>Ma séance</div>
+          <div style={{fontSize:12,color:C.t2,marginTop:2}}>{blocks.length} bloc(s) d'exercice</div>
         </div>
-        <div style={{display:"flex",gap:8}}>
-          {workouts.length>0&&(
-            <button onClick={()=>setShowGhost(!showGhost)} style={{...S.btnGhost,fontSize:12,padding:"7px 14px",color:showGhost?C.orange:C.t2,borderColor:showGhost?C.orange:C.bd}}>
-              👻 Ghost {showGhost?"ON":"OFF"}
-            </button>
-          )}
-          <button onClick={reset} style={{...S.btnGhost,fontSize:12,padding:"7px 14px"}}>↺ Réinitialiser</button>
-        </div>
+        <button onClick={()=>setBlocks([newBlock()])} style={{...S.btnGhost,fontSize:12,padding:"7px 14px"}}>↺ Reset</button>
       </div>
 
-      {workouts.length>0&&showGhost&&(
-        <GhostRunner workouts={workouts} vals={vals} runningVal={running} activeStationIds={activeStationIds}/>
-      )}
+      {blocks.map((b,i)=>(
+        <BlockCard key={b.id} block={b} idx={i} onChange={(d)=>updateBlock(b.id,d)} onRemove={()=>removeBlock(b.id)}/>
+      ))}
 
-      {/* Running */}
-      <div style={{...S.card,padding:"16px 18px"}}>
-        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:runAct?14:0}}>
-          <Toggle on={runAct} onClick={()=>setRunAct(!runAct)} />
-          <div style={{flex:1}}>
-            <div style={{fontWeight:600,fontSize:13,color:runAct?C.t1:C.t2}}>🏃 Running</div>
-            <div style={{fontSize:11,color:C.t2}}>Segments de course entre les stations</div>
-          </div>
-        </div>
-        {runAct && (
-          <div style={{display:"flex",gap:10,alignItems:"center"}}>
-            <input style={{...S.input,width:140}} value={running} onChange={e=>setRun(e.target.value)} placeholder="MM:SS" />
-            <span style={{fontSize:12,color:C.t2}}>temps total running</span>
-          </div>
-        )}
-      </div>
-
-      {/* Standard stations */}
-      <div style={{...S.card,overflow:"hidden"}}>
-        <div style={{padding:"14px 18px",borderBottom:`1px solid ${C.bd}`,fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>Stations HYROX standard</div>
-        {STATIONS.map((s,i)=>(
-          <div key={s.id} style={{borderBottom:i<STATIONS.length-1?`1px solid ${C.bd}`:"none"}}>
-            <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 18px",background:active[s.id]?"transparent":C.bg+"80"}}>
-              <Toggle on={active[s.id]} onClick={()=>setActive({...active,[s.id]:!active[s.id]})} />
-              <div style={{flex:1,minWidth:0}}>
-                {editing===s.id ? (
-                  <div style={{display:"flex",gap:8}}>
-                    <input style={{...S.input,padding:"5px 10px",fontSize:12,flex:1}} value={names[s.id]} onChange={e=>setNames({...names,[s.id]:e.target.value})} />
-                    <input style={{...S.input,padding:"5px 10px",fontSize:12,width:80}} value={subs[s.id]} onChange={e=>setSubs({...subs,[s.id]:e.target.value})} />
-                  </div>
-                ) : (
-                  <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{fontWeight:600,fontSize:13,color:active[s.id]?C.t1:C.t2}}>{names[s.id]}</span>
-                    <span style={{fontSize:11,color:C.orange,fontWeight:600}}>{subs[s.id]}</span>
-                  </div>
-                )}
-              </div>
-              {active[s.id] && (
-                <>
-                  <input style={{...S.input,width:100,padding:"7px 10px",fontSize:13}} value={vals[s.id]} onChange={e=>setVals({...vals,[s.id]:e.target.value})} placeholder="MM:SS" />
-                  <button onClick={()=>setEditing(editing===s.id?null:s.id)} style={{background:"transparent",border:"none",color:editing===s.id?C.orange:C.t3,cursor:"pointer",fontSize:16,padding:"0 4px"}} title="Renommer">✏️</button>
-                </>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Custom exercises */}
-      {customs.length > 0 && (
-        <div style={{...S.card,overflow:"hidden"}}>
-          <div style={{padding:"14px 18px",borderBottom:`1px solid ${C.bd}`,fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>Exercices personnalisés</div>
-          {customs.map((c,i)=>(
-            <div key={c.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 18px",borderBottom:i<customs.length-1?`1px solid ${C.bd}`:"none"}}>
-              <Toggle on={c.active} onClick={()=>updCx(c.id,"active",!c.active)} />
-              <input style={{...S.input,flex:1,padding:"7px 10px",fontSize:13}} value={c.name} onChange={e=>updCx(c.id,"name",e.target.value)} placeholder="Nom" />
-              <input style={{...S.input,width:80,padding:"7px 10px",fontSize:12}} value={c.sub} onChange={e=>updCx(c.id,"sub",e.target.value)} placeholder="Unité" />
-              <input style={{...S.input,width:100,padding:"7px 10px",fontSize:13}} value={c.val} onChange={e=>updCx(c.id,"val",e.target.value)} placeholder="MM:SS" />
-              <button onClick={()=>rmCx(c.id)} style={{background:"transparent",border:"none",color:C.t3,cursor:"pointer",fontSize:18,padding:"0 4px"}}>✕</button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <button onClick={addCustom} style={{...S.btnGhost,display:"flex",alignItems:"center",gap:8,justifyContent:"center",width:"100%",padding:"12px"}}>
-        <span style={{fontSize:18}}>+</span> Ajouter un exercice personnalisé
+      <button onClick={addBlock} style={{...S.btnGhost,display:"flex",alignItems:"center",gap:8,justifyContent:"center",width:"100%",padding:"14px",border:`2px dashed ${C.bd}`}}>
+        <span style={{fontSize:20}}>+</span> Ajouter un bloc
       </button>
 
-      <div style={{...S.card,padding:"18px"}}>
+      <div style={{...S.card,padding:"16px 18px"}}>
         <label style={S.label}>Notes</label>
-        <textarea style={{...S.input,minHeight:56,resize:"vertical",fontFamily:"'Barlow',sans-serif",fontSize:13}} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Sensations, PR, conditions météo…" />
+        <textarea style={{...S.input,minHeight:48,resize:"vertical",fontSize:13}} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Sensations, contexte…"/>
       </div>
 
-      <div style={{...S.card,padding:"18px 22px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      <div style={{...S.card,padding:"18px 20px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
         <div>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:C.t2}}>Temps total</div>
-          <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:34,fontWeight:700,color:total?C.orange:C.t3,marginTop:4,letterSpacing:"-1px"}}>{fmt(total)}</div>
+          <div style={{fontSize:11,fontWeight:700,textTransform:"uppercase",color:C.t2,letterSpacing:"1px"}}>Durée totale</div>
+          <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:32,fontWeight:700,color:totalSecs?C.orange:C.t3,letterSpacing:"-1px"}}>{fmt(totalSecs)}</div>
+          {effortScore>0&&<div style={{fontSize:12,color:C.amber,marginTop:2}}>Score d'effort : {effortScore} pts</div>}
         </div>
-        {saved
-          ? <div style={{color:C.green,fontWeight:700,fontSize:14}}>✓ Session enregistrée !</div>
-          : <button style={{...S.btn,fontSize:14,padding:"12px 28px",opacity:total&&!saving?1:0.4}} onClick={save}>{saving?"Sauvegarde…":"Enregistrer →"}</button>}
+        {saved ? <div style={{color:C.green,fontWeight:700}}>✓ Enregistrée !</div>
+          : <button style={{...S.btn,opacity:totalSecs&&!saving?1:0.4}} onClick={save}>{saving?"…":"Enregistrer →"}</button>}
       </div>
     </div>
   )
 }
 
-/* ── COMMUNITY ───────────────────────────────────────────── */
-function Community({clientId, myProfile, myWorkouts, community, friends, onFriendToggle, onViewProfile}) {
-  const [filter, setFilter] = useState("all")
+/* ══════════════════════════════════════════════════════════
+   📊 DASHBOARD
+══════════════════════════════════════════════════════════ */
+function Dashboard({workouts, profile}) {
+  const sorted = [...workouts].sort((a,b)=>a.date-b.date)
+  const rox = computeROX(workouts)
+  const level = getLevel(rox)
+  const nextLevel = LEVELS_DEF[LEVELS_DEF.indexOf(level)+1]
+  const best = workouts.length ? Math.max(...workouts.map(w=>w.effort_score||0)) : 0
+  const last = sorted[sorted.length-1]
+  const prev = sorted[sorted.length-2]
+  const diff = last&&prev ? (last.effort_score||0)-(prev.effort_score||0) : 0
 
-  const best = myWorkouts.length ? Math.min(...myWorkouts.map(w=>w.total_time)) : 9999
-  const pts  = myWorkouts.length*180 + (best<9999?Math.round(7200/best*1000):0)
-  const me   = {client_id:"me", name:myProfile.name, city:myProfile.city, category:myProfile.category, color:myProfile.color, best_time:best<9999?best:null, workout_count:myWorkouts.length, points:pts}
+  const chartData = sorted.slice(-8).map(w=>({name:fmtShort(w.date), score:w.effort_score||0}))
 
-  const all  = [...community.filter(p=>p.client_id!==clientId), me].sort((a,b)=>(b.points||0)-(a.points||0))
-  const list = filter==="friends" ? all.filter(u=>u.client_id==="me"||friends.includes(u.client_id)) : all
-  const rankOf = (u) => all.indexOf(u)+1
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      {/* Level card */}
+      <div style={{...S.card,padding:"24px",position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",top:0,left:0,right:0,height:4,background:`linear-gradient(90deg,${level.color},${level.color}44)`}}/>
+        <div style={{display:"flex",alignItems:"center",gap:16}}>
+          <div style={{fontSize:52}}>{level.icon}</div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:10,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>Ton niveau</div>
+            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:36,fontWeight:900,color:level.color,letterSpacing:"-1px"}}>{level.name}</div>
+            <div style={{fontSize:12,color:C.t2,marginTop:2}}>ROX Score : <span style={{color:level.color,fontWeight:700}}>{rox}/100</span></div>
+          </div>
+          {nextLevel && (
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:11,color:C.t2}}>Prochain niveau</div>
+              <div style={{fontSize:16}}>{nextLevel.icon} {nextLevel.name}</div>
+              <div style={{fontSize:11,color:C.t2,marginTop:4}}>dans {nextLevel.min-rox} pts</div>
+            </div>
+          )}
+        </div>
+        <div style={{background:C.c3,borderRadius:20,height:6,marginTop:14,overflow:"hidden"}}>
+          <div style={{width:`${rox}%`,height:"100%",background:`linear-gradient(90deg,${level.color}88,${level.color})`,borderRadius:20,transition:"width 0.8s"}}/>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+        <StatCard label="Sessions" value={workouts.length} sub="total"/>
+        <StatCard label="Score max" value={best} sub="effort" accent={C.orange}/>
+        <StatCard label="Progression" value={diff>=0?`+${diff}`:diff} sub="vs dernière" accent={diff>=0?C.green:C.red}/>
+        <StatCard label="Points" value={(workouts.length*180).toLocaleString()} sub="communauté" accent={C.amber}/>
+      </div>
+
+      {/* Chart */}
+      {chartData.length>1&&(
+        <div style={{...S.card,padding:"20px 22px"}}>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:16}}>Score d'effort (8 dernières sessions)</div>
+          <ResponsiveContainer width="100%" height={160}>
+            <LineChart data={chartData}>
+              <CartesianGrid stroke={C.bd} strokeDasharray="3 3"/>
+              <XAxis dataKey="name" tick={{fill:C.t2,fontSize:10}} axisLine={false} tickLine={false}/>
+              <YAxis tick={{fill:C.t2,fontSize:10}} axisLine={false} tickLine={false}/>
+              <Tooltip contentStyle={{background:C.c2,border:`1px solid ${C.bd}`,borderRadius:8}}/>
+              <Line type="monotone" dataKey="score" name="Effort" stroke={C.orange} strokeWidth={2.5} dot={{fill:C.orange,r:4}}/>
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Recent */}
+      <div style={{...S.card,padding:"20px 22px"}}>
+        <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:16}}>Sessions récentes</div>
+        {[...sorted].reverse().slice(0,5).map((w,i)=>(
+          <div key={w.id} style={{display:"flex",alignItems:"center",padding:"10px 0",borderBottom:i<4?`1px solid ${C.bd}`:"none"}}>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:600,fontSize:13}}>{fmtDate(w.date)}</div>
+              <div style={{fontSize:11,color:C.t2,marginTop:2}}>
+                {(w.blocks||[]).map(b=>BLOCK_TYPES.find(t=>t.id===b.type)?.icon||"⚡").join(" ")} · {fmt(w.total_time||0)}
+              </div>
+              {w.notes&&<div style={{fontSize:11,color:C.t3,marginTop:2,fontStyle:"italic"}}>{w.notes}</div>}
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:18,color:i===0?C.green:C.t1}}>{w.effort_score||0}</div>
+              <div style={{fontSize:10,color:C.t2}}>pts effort</div>
+            </div>
+          </div>
+        ))}
+        {!workouts.length&&<div style={{color:C.t2,fontSize:13,textAlign:"center",padding:"20px 0"}}>Lance ta première session ! 💪</div>}
+      </div>
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════
+   🌐 ACTIVITY FEED + COMMUNITY
+══════════════════════════════════════════════════════════ */
+function Community({clientId, myProfile, myWorkouts, community, friends, onFriendToggle, onViewProfile, recentActivity}) {
+  const [tab, setTab] = useState("feed")
+
+  const rox = computeROX(myWorkouts)
+  const myLevel = getLevel(rox)
+  const myBest = myWorkouts.length ? Math.max(...myWorkouts.map(w=>w.effort_score||0)) : 0
+  const myPts = myWorkouts.length*180
+  const me = {client_id:"me", name:myProfile.name, avatar_emoji:myProfile.avatar_emoji, color:myProfile.color, best_score:myBest, workout_count:myWorkouts.length, points:myPts, rox}
+
+  const allProfiles = [...community.filter(p=>p.client_id!==clientId), me].sort((a,b)=>(b.points||0)-(a.points||0))
 
   return (
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
       <div style={{display:"flex",gap:8}}>
-        {[["all","Classement global"],["friends","Mes amis"]].map(([v,l])=>(
-          <button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?C.orange:"transparent",color:filter===v?"#fff":C.t2,border:`1px solid ${filter===v?C.orange:C.bd}`,borderRadius:8,padding:"8px 18px",cursor:"pointer",fontWeight:600,fontSize:13,fontFamily:"inherit",transition:"all 0.15s"}}>{l}</button>
+        {[["feed","🌐 Fil"],["ranking","🏆 Classement"],["friends","👥 Amis"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setTab(v)} style={{background:tab===v?C.orange:"transparent",color:tab===v?"#fff":C.t2,border:`1px solid ${tab===v?C.orange:C.bd}`,borderRadius:8,padding:"8px 16px",cursor:"pointer",fontWeight:600,fontSize:13,fontFamily:"inherit"}}>
+            {l}
+          </button>
         ))}
       </div>
 
-      {list.length === 0 && (
-        <div style={{...S.card,padding:"40px",textAlign:"center",color:C.t2}}>
-          <div style={{fontSize:13}}>Invite tes amis à créer leur profil sur ROXPULSE pour les voir ici !</div>
+      {tab==="feed" && (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {recentActivity.length===0&&(
+            <div style={{...S.card,padding:"40px",textAlign:"center",color:C.t2}}>
+              <div style={{fontSize:32,marginBottom:10}}>🌐</div>
+              <div>Aucune activité récente — commence par une session !</div>
+            </div>
+          )}
+          {recentActivity.map((a,i)=>{
+            const lvl = getLevel(a.rox||0)
+            return (
+              <div key={i} style={{...S.card,padding:"16px 18px",display:"flex",gap:12,alignItems:"flex-start"}}>
+                <Avatar emoji={a.avatar_emoji} color={a.color} size={42}/>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                    <span style={{fontWeight:700,fontSize:14}}>{a.name}</span>
+                    <span style={S.tag(lvl.color)}>{lvl.icon} {lvl.name}</span>
+                    <span style={{fontSize:11,color:C.t2,marginLeft:"auto"}}>{timeAgo(a.date)}</span>
+                  </div>
+                  <div style={{fontSize:13,color:C.t2}}>
+                    A complété une séance de <span style={{color:C.t1,fontWeight:600}}>{fmt(a.total_time||0)}</span>
+                    {" · "}Score d'effort : <span style={{color:C.amber,fontWeight:700}}>{a.effort_score||0} pts</span>
+                  </div>
+                  {a.blocks&&a.blocks.length>0&&(
+                    <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
+                      {a.blocks.map((b,j)=>{
+                        const t=BLOCK_TYPES.find(x=>x.id===b.type)||BLOCK_TYPES[0]
+                        const inten=INTENSITIES.find(x=>x.id===b.intensity)||INTENSITIES[1]
+                        return (
+                          <span key={j} style={{background:inten.color+"18",border:`1px solid ${inten.color}44`,borderRadius:6,padding:"3px 10px",fontSize:11,color:inten.color}}>
+                            {t.icon} {(b.minutes||0)}:{String(b.seconds||0).padStart(2,"0")}
+                          </span>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {a.notes&&<div style={{fontSize:11,color:C.t3,marginTop:6,fontStyle:"italic"}}>"{a.notes}"</div>}
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 
-      <div style={{...S.card,overflow:"hidden"}}>
-        <div style={{padding:"14px 22px 4px",fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>{list.length} athlète(s)</div>
-        {list.map((u,i)=>{
-          const rank    = rankOf(u)
-          const isMe    = u.client_id==="me"
-          const isFriend= friends.includes(u.client_id)
-          const medal   = rank===1?"🥇":rank===2?"🥈":rank===3?"🥉":`#${rank}`
-          return (
-            <div key={u.client_id} onClick={()=>onViewProfile(u,[])} style={{display:"flex",alignItems:"center",padding:"12px 22px",background:isMe?C.orange+"10":"transparent",borderLeft:`3px solid ${isMe?C.orange:"transparent"}`,gap:14,borderBottom:i<list.length-1?`1px solid ${C.bd}`:"none",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background=isMe?C.orange+"18":C.c2+"80"} onMouseLeave={e=>e.currentTarget.style.background=isMe?C.orange+"10":"transparent"}>
-              <div style={{width:32,textAlign:"center",fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:rank<=3?C.amber:C.t3,fontSize:rank<=3?17:13}}>{medal}</div>
-              <Avatar name={u.name} color={u.color} size={38} />
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontWeight:600,fontSize:14,display:"flex",alignItems:"center",gap:8}}>
-                  {u.name}
-                  {isMe && <span style={{background:C.orange+"33",color:C.orange,borderRadius:4,padding:"1px 6px",fontSize:10,fontWeight:700}}>TOI</span>}
-                </div>
-                <div style={{display:"flex",gap:6,marginTop:4,flexWrap:"wrap",alignItems:"center"}}>
-                  <span style={S.tag(CAT_COLOR[u.category]||C.t2)}>{u.category}</span>
-                  {u.city && <span style={{fontSize:11,color:C.t2}}>📍 {u.city}</span>}
-                  <span style={{fontSize:11,color:C.t2}}>{u.workout_count||0} sessions</span>
-                </div>
-              </div>
-              <div style={{textAlign:"right",marginRight:8}}>
-                <div style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:600,fontSize:17,color:C.t1}}>{u.best_time?fmt(u.best_time):"--"}</div>
-                <div style={{fontSize:11,color:C.amber,fontWeight:700,marginTop:2}}>{(u.points||0).toLocaleString()} pts</div>
-              </div>
-              {!isMe && (
-                <button onClick={(e)=>{e.stopPropagation();onFriendToggle(u.client_id)}} style={{background:isFriend?C.green+"22":"transparent",color:isFriend?C.green:C.t3,border:`1px solid ${isFriend?C.green:C.bd}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                  {isFriend?"✓ Ami":"+ Ajouter"}
-                </button>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-/* ── 👤 PROFILE PAGE ─────────────────────────────────────── */
-function ProfilePage({user, workouts, isMe, onBack, onFriendToggle, isFriend}) {
-  const sorted   = [...workouts].sort((a,b)=>a.date-b.date)
-  const best     = workouts.length ? Math.min(...workouts.map(w=>w.total_time)) : null
-  const roxScore = computeROX(workouts)
-  const badges   = computeBadges(workouts)
-  const earned   = badges.filter(b=>b.earned)
-
-  // Best time per station across all sessions
-  const stationBests = {}
-  STATIONS.forEach(s => {
-    const vals = workouts.map(w=>w.stations?.[s.id]).filter(v=>v>0)
-    if (vals.length) stationBests[s.id] = Math.min(...vals)
-  })
-
-  const tierColor = roxScore>=80?C.orange:roxScore>=60?"#FF1744":roxScore>=40?C.amber:roxScore>=20?C.green:C.t2
-  const tier      = roxScore>=80?"Légende":roxScore>=60?"Elite":roxScore>=40?"Pro":roxScore>=20?"Confirmé":"Rookie"
-
-  return (
-    <div style={{display:"flex",flexDirection:"column",gap:14}}>
-      {onBack && <button onClick={onBack} style={{...S.btnGhost,alignSelf:"flex-start",fontSize:12,padding:"7px 14px"}}>← Retour</button>}
-
-      {/* Header card */}
-      <div style={{...S.card,padding:"28px 26px",position:"relative",overflow:"hidden"}}>
-        <div style={{position:"absolute",top:0,left:0,right:0,height:4,background:`linear-gradient(90deg,${user.color},${user.color}44)`}}/>
-        <div style={{display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
-          <Avatar name={user.name} color={user.color} size={72}/>
-          <div style={{flex:1,minWidth:200}}>
-            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,fontWeight:900,letterSpacing:"-0.5px"}}>{user.name}</div>
-              {isMe && <span style={{...S.tag(C.orange)}}>Mon profil</span>}
-            </div>
-            <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap",alignItems:"center"}}>
-              <span style={S.tag(CAT_COLOR[user.category]||C.t2)}>{user.category}</span>
-              {user.city && <span style={{fontSize:13,color:C.t2}}>📍 {user.city}</span>}
-            </div>
-            <div style={{fontSize:12,color:C.t3,marginTop:6}}>Membre depuis {user.joined_at?new Date(user.joined_at).toLocaleDateString("fr-FR",{month:"long",year:"numeric"}):"--"}</div>
+      {tab==="ranking" && (
+        <div style={{...S.card,overflow:"hidden"}}>
+          <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.bd}`,fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>
+            {allProfiles.length} athlète(s)
           </div>
-          {!isMe && (
-            <button onClick={onFriendToggle} style={{...S.btn,background:isFriend?"transparent":C.orange,color:isFriend?C.green:C.t1,border:`1px solid ${isFriend?C.green:C.orange}`,padding:"10px 20px"}}>
-              {isFriend?"✓ Ami":"+ Ajouter comme ami"}
-            </button>
+          {allProfiles.map((u,i)=>{
+            const lvl=getLevel(u.rox||computeROX([]))
+            const isMe=u.client_id==="me"
+            const isFriend=friends.includes(u.client_id)
+            const medal=i===0?"🥇":i===1?"🥈":i===2?"🥉":`#${i+1}`
+            return (
+              <div key={u.client_id} onClick={()=>onViewProfile(u)} style={{display:"flex",alignItems:"center",padding:"12px 20px",background:isMe?C.orange+"10":"transparent",borderLeft:`3px solid ${isMe?C.orange:"transparent"}`,gap:12,borderBottom:i<allProfiles.length-1?`1px solid ${C.bd}`:"none",cursor:"pointer"}}
+                onMouseEnter={e=>e.currentTarget.style.background=isMe?C.orange+"18":C.c2+"80"}
+                onMouseLeave={e=>e.currentTarget.style.background=isMe?C.orange+"10":"transparent"}>
+                <div style={{width:28,textAlign:"center",fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:i<3?C.amber:C.t3,fontSize:i<3?17:12}}>{medal}</div>
+                <Avatar emoji={u.avatar_emoji} color={u.color} name={u.name} size={38}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:14,display:"flex",alignItems:"center",gap:6}}>
+                    {u.name}
+                    {isMe&&<span style={{...S.tag(C.orange),fontSize:9}}>TOI</span>}
+                  </div>
+                  <div style={{display:"flex",gap:6,marginTop:3}}>
+                    <span style={S.tag(lvl.color)}>{lvl.icon} {lvl.name}</span>
+                    {u.city&&<span style={{fontSize:11,color:C.t2}}>📍{u.city}</span>}
+                  </div>
+                </div>
+                <div style={{textAlign:"right",marginRight:8}}>
+                  <div style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:16,color:C.t1}}>{(u.points||0).toLocaleString()}</div>
+                  <div style={{fontSize:10,color:C.t2}}>pts</div>
+                </div>
+                {!isMe&&(
+                  <button onClick={(e)=>{e.stopPropagation();onFriendToggle(u.client_id)}} style={{background:isFriend?C.green+"22":"transparent",color:isFriend?C.green:C.t3,border:`1px solid ${isFriend?C.green:C.bd}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                    {isFriend?"✓ Ami":"+ Ajouter"}
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {tab==="friends" && (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {allProfiles.filter(u=>u.client_id==="me"||friends.includes(u.client_id)).map((u,i)=>{
+            const lvl=getLevel(u.rox||0)
+            const isMe=u.client_id==="me"
+            return (
+              <div key={u.client_id} onClick={()=>onViewProfile(u)} style={{...S.card,padding:"14px 18px",display:"flex",gap:12,alignItems:"center",cursor:"pointer"}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor=C.orange}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=C.bd}>
+                <Avatar emoji={u.avatar_emoji} color={u.color} name={u.name} size={46}/>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:15}}>{u.name} {isMe&&"(Toi)"}</div>
+                  <div style={{display:"flex",gap:6,marginTop:4}}>
+                    <span style={S.tag(lvl.color)}>{lvl.icon} {lvl.name}</span>
+                    <span style={{fontSize:11,color:C.t2}}>{u.workout_count||0} sessions</span>
+                  </div>
+                </div>
+                <span style={{color:C.t2,fontSize:12}}>Voir →</span>
+              </div>
+            )
+          })}
+          {friends.length===0&&(
+            <div style={{...S.card,padding:"40px",textAlign:"center",color:C.t2}}>
+              <div style={{fontSize:32,marginBottom:10}}>👥</div>
+              <div>Ajoute des amis depuis le classement !</div>
+            </div>
           )}
         </div>
-      </div>
-
-      {/* Stats row */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
-        <StatCard label="Sessions" value={workouts.length} sub="entraînements"/>
-        <StatCard label="Meilleur temps" value={best?fmt(best):"--"} accent={C.orange}/>
-        <StatCard label="ROX Score™" value={roxScore} sub={tier} accent={tierColor}/>
-        <StatCard label="Points" value={(user.points||0).toLocaleString()} accent={C.amber}/>
-      </div>
-
-      {/* Station bests */}
-      {Object.keys(stationBests).length > 0 && (
-        <div style={{...S.card,padding:"20px 22px"}}>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:14}}>🏅 Meilleurs temps par station</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-            {STATIONS.map(s => stationBests[s.id] ? (
-              <div key={s.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",background:C.c2,borderRadius:8,border:`1px solid ${C.bd}`}}>
-                <div>
-                  <div style={{fontSize:12,fontWeight:600,color:C.t1}}>{s.name}</div>
-                  <div style={{fontSize:10,color:C.orange}}>{s.sub}</div>
-                </div>
-                <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:16,fontWeight:700,color:C.t1}}>{fmt(stationBests[s.id])}</div>
-              </div>
-            ) : null)}
-          </div>
-        </div>
-      )}
-
-      {/* Badges */}
-      <div style={{...S.card,padding:"18px 20px"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>🎖️ Badges</div>
-          <span style={{fontSize:12,color:C.amber,fontWeight:700}}>{earned.length}/{badges.length} débloqués</span>
-        </div>
-        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-          {badges.map(b=>(
-            <div key={b.id} title={`${b.name} — ${b.desc}`} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"10px 12px",borderRadius:10,background:b.earned?C.c2:C.bg,border:`1px solid ${b.earned?RARITY_COL[b.rarity]:C.bd}`,opacity:b.earned?1:0.3,minWidth:54,transition:"all 0.2s"}}>
-              <span style={{fontSize:22}}>{b.icon}</span>
-              <span style={{fontSize:9,fontWeight:700,color:b.earned?RARITY_COL[b.rarity]:C.t3,textTransform:"uppercase",letterSpacing:"0.5px",textAlign:"center",lineHeight:1.2}}>{b.name}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Session history */}
-      {workouts.length > 0 && (
-        <div style={{...S.card,padding:"20px 22px"}}>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:14}}>📋 Historique des sessions</div>
-          {[...sorted].reverse().slice(0,8).map((w,i)=>(
-            <div key={w.id} style={{display:"flex",alignItems:"center",padding:"10px 0",borderBottom:i<Math.min(7,workouts.length-1)?`1px solid ${C.bd}`:"none"}}>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:600,fontSize:13}}>{fmtDate(w.date)}</div>
-                {w.notes&&<div style={{fontSize:11,color:C.t2,marginTop:2}}>{w.notes}</div>}
-              </div>
-              <div style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:600,fontSize:18,color:i===0?C.green:C.t1}}>{fmt(w.total_time)}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {workouts.length === 0 && (
-        <div style={{...S.card,padding:"40px",textAlign:"center",color:C.t2}}>
-          <div style={{fontSize:32,marginBottom:10}}>🏋️</div>
-          <div style={{fontSize:14,fontWeight:600}}>Aucune session enregistrée pour l'instant</div>
-        </div>
       )}
     </div>
   )
 }
 
-/* ── SESSION DETAIL ──────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   📅 PLANNING
+══════════════════════════════════════════════════════════ */
 function SessionDetail({session, clientId, myProfile, onBack, onUpdateWorkout, onLogResult}) {
   const isAdmin = session.organizer_client_id === clientId
-  const isJoined= session.participants.includes(clientId) || isAdmin
+  const isJoined = session.participants.includes(clientId) || isAdmin
+  const [results, setResults] = useState([])
+  const [logMode, setLogMode] = useState(false)
+  const [myBlocks, setMyBlocks] = useState([{id:"lb0",type:"run",minutes:0,seconds:0,intensity:"med"}])
+  const [saved, setSaved] = useState(false)
+  const myResult = results.find(r=>r.client_id===clientId)
 
-  const defaultWorkout = {stations:STATIONS.map(s=>({...s,active:true})), hasRunning:true}
-  const [workout,        setWorkout]        = useState(session.workout || defaultWorkout)
-  const [editingWorkout, setEditingWorkout] = useState(false)
-  const [results,        setResults]        = useState([])
-  const [logMode,        setLogMode]        = useState(false)
-  const [vals,           setVals]           = useState({})
-  const [running,        setRunning]        = useState("")
-  const [saved,          setSaved]          = useState(false)
-  const [saving,         setSaving]         = useState(false)
-
-  const myResult     = results.find(r=>r.client_id===clientId)
-  const activeStations = workout.stations.filter(s=>s.active)
-  const total = activeStations.reduce((a,s)=>a+parseT(vals[s.id]||""),0) + (workout.hasRunning?parseT(running):0)
+  const newBlock = () => ({id:`lb${Date.now()}`,type:"run",minutes:0,seconds:0,intensity:"med"})
 
   const loadResults = async () => {
     const data = await db.getSessionResults(session.id)
@@ -775,158 +680,95 @@ function SessionDetail({session, clientId, myProfile, onBack, onUpdateWorkout, o
 
   useEffect(() => {
     loadResults()
-    // Real-time: see others' results appear live
-    const channel = supabase
-      .channel(`results:${session.id}`)
-      .on("postgres_changes", {event:"*", schema:"public", table:"session_results", filter:`session_id=eq.${session.id}`}, loadResults)
+    const ch = supabase.channel(`res:${session.id}`)
+      .on("postgres_changes",{event:"*",schema:"public",table:"session_results",filter:`session_id=eq.${session.id}`},loadResults)
       .subscribe()
-    return () => supabase.removeChannel(channel)
-  }, [session.id])
-
-  const saveWorkout = async () => { await onUpdateWorkout(workout); setEditingWorkout(false) }
+    return () => supabase.removeChannel(ch)
+  },[session.id])
 
   const saveResult = async () => {
-    if (!total||saving) return
-    setSaving(true)
-    const st={}; activeStations.forEach(s=>st[s.id]=parseT(vals[s.id]||""))
-    await onLogResult(session.id, clientId, {user_name:myProfile.name, color:myProfile.color, total_time:total, stations:st, running:parseT(running), logged_at:Date.now()})
-    setLogMode(false); setSaving(false); setSaved(true); setTimeout(()=>setSaved(false),4000)
+    const totalSecs = myBlocks.reduce((s,b)=>(s+(b.minutes||0)*60+(b.seconds||0)),0)
+    if (!totalSecs) return
+    const score = calcEffortScore(myBlocks)
+    await onLogResult(session.id, clientId, {user_name:myProfile.name, color:myProfile.color, avatar_emoji:myProfile.avatar_emoji, total_time:totalSecs, effort_score:score, blocks:myBlocks, logged_at:Date.now()})
+    setLogMode(false); setSaved(true); setTimeout(()=>setSaved(false),4000)
   }
 
-  const sorted = [...results].sort((a,b)=>a.total_time-b.total_time)
+  const sorted = [...results].sort((a,b)=>(b.effort_score||0)-(a.effort_score||0))
+  const d = new Date(session.date)
 
   return (
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
-      <button onClick={onBack} style={{...S.btnGhost,alignSelf:"flex-start",fontSize:12,padding:"7px 14px"}}>← Retour au planning</button>
+      <button onClick={onBack} style={{...S.btnGhost,alignSelf:"flex-start",fontSize:12,padding:"7px 14px"}}>← Retour</button>
 
-      {/* Header */}
       <div style={{...S.card,padding:"22px 24px"}}>
-        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
           <div>
-            <div style={{fontWeight:900,fontSize:22,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:"-0.5px"}}>{session.title}</div>
+            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:26,fontWeight:900}}>{session.title}</div>
             <div style={{fontSize:13,color:C.t2,marginTop:4}}>📍 {session.location}</div>
-            <div style={{display:"flex",gap:7,marginTop:10,flexWrap:"wrap",alignItems:"center"}}>
+            <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
               <span style={S.tag(C.orange)}>{session.type}</span>
               <span style={S.tag(C.t2)}>{session.level}</span>
-              <span style={{fontSize:12,color:C.t2}}>👥 {session.participants.length}/{session.max_p} inscrits</span>
-              {isAdmin && <span style={S.tag(C.amber)}>👑 Admin</span>}
+              <span style={{fontSize:11,color:C.t2}}>👥 {session.participants.length}/{session.max_p}</span>
+              {isAdmin&&<span style={S.tag(C.amber)}>👑 Admin</span>}
             </div>
-            <div style={{fontSize:11,color:C.t3,marginTop:8}}>Organisé par {session.organizer_name}</div>
           </div>
-          <div style={{textAlign:"right",flexShrink:0}}>
-            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:32,fontWeight:900,color:C.orange,lineHeight:1}}>
-              {new Date(session.date).getDate()} {new Date(session.date).toLocaleString("fr-FR",{month:"short"})}
-            </div>
-            <div style={{fontSize:12,color:C.t2,marginTop:4}}>{new Date(session.date).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:30,fontWeight:900,color:C.orange}}>{d.getDate()} {d.toLocaleString("fr-FR",{month:"short"})}</div>
+            <div style={{fontSize:12,color:C.t2}}>{d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</div>
           </div>
-        </div>
-      </div>
-
-      {/* Workout config */}
-      <div style={{...S.card,overflow:"hidden"}}>
-        <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.bd}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <div>
-            <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>Programme</div>
-            <div style={{fontSize:13,color:C.t1,marginTop:3,fontWeight:500}}>{activeStations.length} station(s){workout.hasRunning?" + running":""}</div>
-          </div>
-          {isAdmin && !editingWorkout && <button onClick={()=>setEditingWorkout(true)} style={{...S.btn,fontSize:12,padding:"7px 16px"}}>✏️ Modifier</button>}
-          {isAdmin && editingWorkout && (
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>setEditingWorkout(false)} style={{...S.btnGhost,fontSize:12,padding:"7px 12px"}}>Annuler</button>
-              <button onClick={saveWorkout} style={{...S.btn,fontSize:12,padding:"7px 16px"}}>✓ Valider</button>
-            </div>
-          )}
-          {!isAdmin && <span style={{background:C.green+"22",color:C.green,borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700}}>Défini par l'admin</span>}
-        </div>
-
-        <div style={{display:"flex",alignItems:"center",gap:12,padding:"11px 20px",borderBottom:`1px solid ${C.bd}`,background:C.c2+"40"}}>
-          {editingWorkout ? <Toggle on={workout.hasRunning} onClick={()=>setWorkout({...workout,hasRunning:!workout.hasRunning})} /> : <div style={{width:8,height:8,borderRadius:"50%",background:workout.hasRunning?C.green:C.t3,flexShrink:0}} />}
-          <span style={{fontSize:13,fontWeight:600,color:workout.hasRunning?C.t1:C.t2}}>🏃 Running entre les stations</span>
-        </div>
-
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr"}}>
-          {workout.stations.map((s,i)=>(
-            <div key={s.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 20px",borderBottom:i<workout.stations.length-2?`1px solid ${C.bd}`:"none",borderRight:i%2===0?`1px solid ${C.bd}`:"none",background:s.active?"transparent":C.bg+"60",opacity:s.active?1:0.45}}>
-              {editingWorkout ? <Toggle on={s.active} onClick={()=>setWorkout({...workout,stations:workout.stations.map(st=>st.id===s.id?{...st,active:!st.active}:st)})} /> : <div style={{width:8,height:8,borderRadius:"50%",background:s.active?C.orange:C.t3,flexShrink:0}} />}
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:12,fontWeight:600,color:s.active?C.t1:C.t2}}>{s.name}</div>
-                <div style={{fontSize:11,color:C.orange}}>{s.sub}</div>
-              </div>
-            </div>
-          ))}
         </div>
       </div>
 
       {/* Results */}
       <div style={{...S.card,overflow:"hidden"}}>
         <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.bd}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>
-            Résultats en temps réel — {sorted.length} soumis
-          </div>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>Résultats · {sorted.length} soumis</div>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            {saved && <span style={{color:C.green,fontWeight:700,fontSize:12}}>✓ Résultat enregistré !</span>}
-            {myResult && <span style={{background:C.green+"22",color:C.green,borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:700}}>✓ Ton résultat soumis</span>}
-            {isJoined && !myResult && !logMode && (
-              <button onClick={()=>setLogMode(true)} style={{...S.btn,fontSize:12,padding:"7px 16px"}}>+ Mon résultat</button>
-            )}
+            {saved&&<span style={{color:C.green,fontWeight:700,fontSize:12}}>✓ Soumis !</span>}
+            {myResult&&<span style={S.tag(C.green)}>✓ Soumis</span>}
+            {isJoined&&!myResult&&!logMode&&<button onClick={()=>setLogMode(true)} style={{...S.btn,fontSize:12,padding:"7px 16px"}}>+ Mon résultat</button>}
           </div>
         </div>
 
-        {sorted.length===0 && !logMode && (
-          <div style={{padding:"32px",textAlign:"center",color:C.t2,fontSize:13}}>
-            {isJoined ? "Sois le premier à soumettre ton résultat !" : "Inscris-toi pour soumettre ton résultat."}
-          </div>
-        )}
-
         {sorted.map((r,i)=>{
-          const isMe  = r.client_id===clientId
-          const medal = i===0?"🥇":i===1?"🥈":i===2?"🥉":`#${i+1}`
+          const isMe=r.client_id===clientId
+          const lvl=getLevel(r.rox||0)
+          const medal=i===0?"🥇":i===1?"🥈":i===2?"🥉":`#${i+1}`
           return (
-            <div key={r.id||r.client_id} style={{borderBottom:i<sorted.length-1?`1px solid ${C.bd}`:"none"}}>
-              <div style={{display:"flex",alignItems:"center",gap:12,padding:"13px 20px",background:isMe?C.orange+"11":"transparent",borderLeft:`3px solid ${isMe?C.orange:"transparent"}`}}>
-                <div style={{fontSize:i<3?18:13,width:28,textAlign:"center",fontWeight:700,color:i<3?C.amber:C.t3,fontFamily:"'JetBrains Mono',monospace"}}>{medal}</div>
-                <Avatar name={r.user_name} color={r.color} size={36} />
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontWeight:600,fontSize:13,display:"flex",alignItems:"center",gap:6}}>
-                    {r.user_name}
-                    {isMe && <span style={{background:C.orange+"33",color:C.orange,borderRadius:4,padding:"1px 6px",fontSize:10,fontWeight:700}}>TOI</span>}
-                  </div>
-                  <div style={{fontSize:11,color:C.t2,marginTop:3,display:"flex",gap:10,flexWrap:"wrap"}}>
-                    {workout.hasRunning && <span>🏃 {fmt(r.running)}</span>}
-                    {activeStations.slice(0,4).map(s=>(
-                      <span key={s.id}>{s.name.split(" ")[0]}: <span style={{color:C.t1,fontFamily:"'JetBrains Mono',monospace"}}>{fmt(r.stations?.[s.id])}</span></span>
-                    ))}
-                  </div>
+            <div key={r.client_id||i} style={{display:"flex",alignItems:"center",gap:12,padding:"13px 20px",background:isMe?C.orange+"11":"transparent",borderLeft:`3px solid ${isMe?C.orange:"transparent"}`,borderBottom:i<sorted.length-1?`1px solid ${C.bd}`:"none"}}>
+              <div style={{fontSize:i<3?18:12,width:24,textAlign:"center",color:i<3?C.amber:C.t3,fontWeight:700}}>{medal}</div>
+              <Avatar emoji={r.avatar_emoji} color={r.color} name={r.user_name} size={36}/>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,fontSize:13}}>{r.user_name} {isMe&&<span style={{...S.tag(C.orange),fontSize:9}}>TOI</span>}</div>
+                <div style={{fontSize:11,color:C.t2,marginTop:2}}>
+                  {(r.blocks||[]).map(b=>BLOCK_TYPES.find(t=>t.id===b.type)?.icon||"⚡").join(" ")} · {fmt(r.total_time||0)}
                 </div>
-                <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:22,fontWeight:700,color:i===0?C.amber:isMe?C.orange:C.t1}}>{fmt(r.total_time)}</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:20,color:i===0?C.amber:isMe?C.orange:C.t1}}>{r.effort_score||0}</div>
+                <div style={{fontSize:10,color:C.t2}}>pts effort</div>
               </div>
             </div>
           )
         })}
 
-        {logMode && (
+        {sorted.length===0&&!logMode&&(
+          <div style={{padding:"32px",textAlign:"center",color:C.t2,fontSize:13}}>
+            {isJoined?"Sois le premier ! 🚀":"Inscris-toi pour participer."}
+          </div>
+        )}
+
+        {logMode&&(
           <div style={{padding:"20px",borderTop:`1px solid ${C.bd}`,background:C.c2+"50"}}>
-            <div style={{fontSize:11,fontWeight:700,letterSpacing:"1px",textTransform:"uppercase",color:C.t2,marginBottom:14}}>Saisir mon résultat</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-              {workout.hasRunning && (
-                <div style={{gridColumn:"1/-1",background:C.c2,border:`1px solid ${C.bd}`,borderRadius:8,padding:"12px 14px"}}>
-                  <label style={S.label}>🏃 Running total</label>
-                  <input style={{...S.input,width:140,background:C.c3}} value={running} onChange={e=>setRunning(e.target.value)} placeholder="MM:SS" />
-                </div>
-              )}
-              {activeStations.map(s=>(
-                <div key={s.id} style={{background:C.c2,border:`1px solid ${C.bd}`,borderRadius:8,padding:"12px 14px"}}>
-                  <label style={S.label}>{s.name} <span style={{color:C.orange}}>{s.sub}</span></label>
-                  <input style={{...S.input,background:C.c3}} value={vals[s.id]||""} onChange={e=>setVals({...vals,[s.id]:e.target.value})} placeholder="MM:SS" />
-                </div>
-              ))}
-            </div>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-              <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:26,fontWeight:700,color:total?C.orange:C.t3}}>{fmt(total)}</div>
-              <div style={{display:"flex",gap:8}}>
-                <button onClick={()=>setLogMode(false)} style={{...S.btnGhost,fontSize:12,padding:"8px 14px"}}>Annuler</button>
-                <button onClick={saveResult} style={{...S.btn,opacity:total&&!saving?1:0.4}}>{saving?"Envoi…":"Valider mon temps →"}</button>
-              </div>
+            <div style={{fontWeight:700,marginBottom:14}}>Saisir ma séance</div>
+            {myBlocks.map((b,i)=>(
+              <BlockCard key={b.id} block={b} idx={i} onChange={(d)=>setMyBlocks(p=>p.map(x=>x.id===b.id?d:x))} onRemove={()=>setMyBlocks(p=>p.filter(x=>x.id!==b.id))}/>
+            ))}
+            <button onClick={()=>setMyBlocks(p=>[...p,newBlock()])} style={{...S.btnGhost,width:"100%",margin:"10px 0",padding:"10px"}}>+ Bloc</button>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <button onClick={()=>setLogMode(false)} style={{...S.btnGhost,fontSize:12,padding:"8px 14px"}}>Annuler</button>
+              <button onClick={saveResult} style={S.btn}>Valider →</button>
             </div>
           </div>
         )}
@@ -935,63 +777,55 @@ function SessionDetail({session, clientId, myProfile, onBack, onUpdateWorkout, o
   )
 }
 
-/* ── SCHEDULE ────────────────────────────────────────────── */
 function Schedule({clientId, myProfile, sessions, onAdd, onJoin, onUpdateWorkout, onLogResult}) {
-  const [open,     setOpen]     = useState(false)
-  const [form,     setForm]     = useState({title:"",date:"",location:"",type:SESSION_TYPES[0],level:LEVELS[0],maxP:"10"})
-  const [ok,       setOk]       = useState(false)
+  const [open, setOpen] = useState(false)
+  const [form, setForm] = useState({title:"",date:"",location:"",type:SESSION_TYPES[0],level:LEVELS_SESSION[0],maxP:"12"})
   const [selected, setSelected] = useState(null)
+  const [ok, setOk] = useState(false)
 
   const create = async () => {
     if (!form.title||!form.date||!form.location) return
-    await onAdd({...form, max_p:parseInt(form.maxP)||10, date:new Date(form.date).getTime(), organizer_name:myProfile.name, organizer_client_id:clientId})
-    setForm({title:"",date:"",location:"",type:SESSION_TYPES[0],level:LEVELS[0],maxP:"10"})
+    await onAdd({...form,max_p:parseInt(form.maxP)||12,date:new Date(form.date).getTime(),organizer_name:myProfile.name,organizer_client_id:clientId})
+    setForm({title:"",date:"",location:"",type:SESSION_TYPES[0],level:LEVELS_SESSION[0],maxP:"12"})
     setOpen(false); setOk(true); setTimeout(()=>setOk(false),3000)
   }
 
   const upcoming = sessions.filter(s=>s.date>Date.now()).sort((a,b)=>a.date-b.date)
-  const TYPE_COL = {"Simulation complète":C.orange,"Stations uniquement":C.amber,"Running + Stations":C.green,"Force & Endurance":"#448AFF"}
+  const past     = sessions.filter(s=>s.date<=Date.now()).sort((a,b)=>b.date-a.date).slice(0,3)
 
   if (selected) {
     const session = sessions.find(s=>s.id===selected)
     if (!session) { setSelected(null); return null }
-    return (
-      <SessionDetail
-        session={session} clientId={clientId} myProfile={myProfile}
-        onBack={()=>setSelected(null)}
-        onUpdateWorkout={(wk)=>onUpdateWorkout(selected,wk)}
-        onLogResult={onLogResult}
-      />
-    )
+    return <SessionDetail session={session} clientId={clientId} myProfile={myProfile} onBack={()=>setSelected(null)} onUpdateWorkout={(wk)=>onUpdateWorkout(selected,wk)} onLogResult={onLogResult}/>
   }
 
   return (
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{fontSize:13,color:C.t2}}>{upcoming.length} session(s) à venir · Clique pour voir le détail</div>
+        <div style={{fontSize:13,color:C.t2}}>{upcoming.length} session(s) à venir</div>
         <div style={{display:"flex",gap:8}}>
-          {ok && <span style={{color:C.green,fontWeight:700,fontSize:13}}>✓ Créée !</span>}
+          {ok&&<span style={{color:C.green,fontWeight:700}}>✓ Créée !</span>}
           <button style={{...S.btn,...(open?{background:C.c3,color:C.t1,border:`1px solid ${C.bd}`}:{})}} onClick={()=>setOpen(!open)}>
             {open?"✕ Annuler":"+ Organiser"}
           </button>
         </div>
       </div>
 
-      {open && (
+      {open&&(
         <div style={{...S.card,padding:"24px"}}>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:20}}>Nouvelle session de groupe</div>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:20}}>Nouvelle session</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
             <div style={{gridColumn:"1/-1"}}>
-              <label style={S.label}>Nom de la session</label>
-              <input style={S.input} value={form.title} onChange={e=>setForm({...form,title:e.target.value})} placeholder="Ex: HYROX Training Fès" />
+              <label style={S.label}>Nom</label>
+              <input style={S.input} value={form.title} onChange={e=>setForm({...form,title:e.target.value})} placeholder="Ex: HYROX Fès – Samedi matin"/>
             </div>
             <div>
               <label style={S.label}>Date & heure</label>
-              <input type="datetime-local" style={S.input} value={form.date} onChange={e=>setForm({...form,date:e.target.value})} />
+              <input type="datetime-local" style={S.input} value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/>
             </div>
             <div>
               <label style={S.label}>Lieu</label>
-              <input style={S.input} value={form.location} onChange={e=>setForm({...form,location:e.target.value})} placeholder="Salle, adresse…" />
+              <input style={S.input} value={form.location} onChange={e=>setForm({...form,location:e.target.value})} placeholder="Salle Atlas, Fès"/>
             </div>
             <div>
               <label style={S.label}>Type</label>
@@ -1002,211 +836,383 @@ function Schedule({clientId, myProfile, sessions, onAdd, onJoin, onUpdateWorkout
             <div>
               <label style={S.label}>Niveau requis</label>
               <select style={{...S.input,cursor:"pointer"}} value={form.level} onChange={e=>setForm({...form,level:e.target.value})}>
-                {LEVELS.map(l=><option key={l}>{l}</option>)}
+                {LEVELS_SESSION.map(l=><option key={l}>{l}</option>)}
               </select>
             </div>
             <div>
               <label style={S.label}>Places max</label>
-              <input type="number" style={S.input} value={form.maxP} onChange={e=>setForm({...form,maxP:e.target.value})} min={2} max={50} />
+              <input type="number" style={S.input} value={form.maxP} onChange={e=>setForm({...form,maxP:e.target.value})} min={2} max={50}/>
             </div>
           </div>
           <button style={{...S.btn,marginTop:20}} onClick={create}>Créer la session</button>
         </div>
       )}
 
+      {upcoming.length===0&&!open&&(
+        <div style={{...S.card,padding:"48px",textAlign:"center",color:C.t2}}>
+          <div style={{fontSize:36,marginBottom:12}}>📅</div>
+          <div style={{fontWeight:600,fontSize:15}}>Aucune session à venir</div>
+          <div style={{fontSize:13,marginTop:6}}>Sois le premier à organiser une session !</div>
+        </div>
+      )}
+
       {upcoming.map(s=>{
-        const joined = s.participants.includes(clientId)||s.organizer_client_id===clientId
-        const full   = s.participants.length >= s.max_p
-        const d      = new Date(s.date)
+        const joined=s.participants.includes(clientId)||s.organizer_client_id===clientId
+        const full=s.participants.length>=s.max_p
+        const d=new Date(s.date)
         return (
-          <div key={s.id} onClick={()=>setSelected(s.id)} style={{...S.card,padding:"20px 22px",display:"flex",alignItems:"flex-start",gap:16,cursor:"pointer",transition:"border-color 0.15s"}}
+          <div key={s.id} onClick={()=>setSelected(s.id)} style={{...S.card,padding:"18px 20px",display:"flex",gap:14,cursor:"pointer",alignItems:"flex-start"}}
             onMouseEnter={e=>e.currentTarget.style.borderColor=C.orange}
             onMouseLeave={e=>e.currentTarget.style.borderColor=C.bd}>
-            <div style={{background:C.c2,border:`1px solid ${C.bd}`,borderRadius:10,padding:"10px 14px",textAlign:"center",minWidth:54,flexShrink:0}}>
+            <div style={{background:C.c2,border:`1px solid ${C.bd}`,borderRadius:10,padding:"10px 14px",textAlign:"center",minWidth:52,flexShrink:0}}>
               <div style={{fontSize:24,fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif",color:C.orange,lineHeight:1}}>{d.getDate()}</div>
-              <div style={{fontSize:10,color:C.t2,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.5px"}}>{d.toLocaleString("fr-FR",{month:"short"})}</div>
+              <div style={{fontSize:10,color:C.t2,fontWeight:700,textTransform:"uppercase"}}>{d.toLocaleString("fr-FR",{month:"short"})}</div>
             </div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontWeight:700,fontSize:15}}>{s.title}</div>
               <div style={{fontSize:12,color:C.t2,marginTop:3}}>📍 {s.location}</div>
-              <div style={{display:"flex",gap:7,marginTop:8,flexWrap:"wrap",alignItems:"center"}}>
-                <span style={S.tag(TYPE_COL[s.type]||C.amber)}>{s.type}</span>
+              <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
+                <span style={S.tag(C.orange)}>{s.type}</span>
                 <span style={S.tag(C.t2)}>{s.level}</span>
                 <span style={{fontSize:11,color:C.t2}}>👥 {s.participants.length}/{s.max_p}</span>
-                {s.organizer_client_id===clientId && <span style={S.tag(C.amber)}>👑 Admin</span>}
+                {s.organizer_client_id===clientId&&<span style={S.tag(C.amber)}>👑</span>}
               </div>
-              <div style={{fontSize:11,color:C.t3,marginTop:6}}>Organisé par {s.organizer_name}</div>
+              <div style={{fontSize:11,color:C.t3,marginTop:6}}>par {s.organizer_name} · {d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</div>
             </div>
-            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8,flexShrink:0}}>
-              <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:C.t2}}>{d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</div>
+            <div style={{flexShrink:0}}>
               {joined ? <span style={{color:C.green,fontWeight:700,fontSize:12}}>✓ Inscrit</span>
-                : <button style={{...S.btn,padding:"7px 14px",fontSize:11,opacity:full?0.4:1}} onClick={e=>{e.stopPropagation();!full&&onJoin(s.id)}} disabled={full}>{full?"Complet":"S'inscrire"}</button>}
-              <span style={{fontSize:11,color:C.t2}}>Voir détail →</span>
+                : <button style={{...S.btn,padding:"8px 14px",fontSize:11,opacity:full?0.4:1}} onClick={e=>{e.stopPropagation();!full&&onJoin(s.id)}} disabled={full}>{full?"Complet":"S'inscrire"}</button>}
             </div>
           </div>
         )
       })}
 
-      {!upcoming.length && !open && (
-        <div style={{...S.card,padding:"48px",textAlign:"center",color:C.t2}}>
-          <div style={{fontSize:36,marginBottom:12}}>📅</div>
-          <div style={{fontWeight:600,fontSize:15}}>Aucune session programmée</div>
-          <div style={{fontSize:13,marginTop:6}}>Organise la première session ROXPULSE de ta région !</div>
+      {past.length>0&&(
+        <div>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,margin:"8px 0"}}>Sessions passées</div>
+          {past.map(s=>{
+            const d=new Date(s.date)
+            return (
+              <div key={s.id} onClick={()=>setSelected(s.id)} style={{...S.card,padding:"14px 18px",display:"flex",gap:12,cursor:"pointer",opacity:0.7,marginBottom:8}}
+                onMouseEnter={e=>{e.currentTarget.style.opacity="1";e.currentTarget.style.borderColor=C.orange}}
+                onMouseLeave={e=>{e.currentTarget.style.opacity="0.7";e.currentTarget.style.borderColor=C.bd}}>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600,fontSize:13}}>{s.title}</div>
+                  <div style={{fontSize:11,color:C.t2}}>{d.toLocaleDateString("fr-FR")} · {s.location}</div>
+                </div>
+                <span style={{fontSize:11,color:C.t2}}>Voir résultats →</span>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
   )
 }
 
-/* ── APP PRINCIPAL ───────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   👤 PROFILE PAGE
+══════════════════════════════════════════════════════════ */
+function ProfilePage({user, workouts, isMe, onBack, onFriendToggle, isFriend, onSaveBio, onSaveAvatar}) {
+  const rox = computeROX(workouts)
+  const level = getLevel(rox)
+  const sorted = [...workouts].sort((a,b)=>a.date-b.date)
+  const bestScore = workouts.length ? Math.max(...workouts.map(w=>w.effort_score||0)) : 0
+
+  const [editingBio, setEditingBio] = useState(false)
+  const [editingAvatar, setEditingAvatar] = useState(false)
+  const [bio, setBio] = useState({objective:user.bio_objective||"",motto:user.bio_motto||"",race_date:user.bio_race_date||"",race_city:user.bio_race_city||""})
+  const [emoji, setEmoji] = useState(user.avatar_emoji||"🏃")
+  const [color, setColor] = useState(user.color||C.orange)
+
+  const saveBio = async () => { await onSaveBio(bio); setEditingBio(false) }
+  const saveAvatar = async () => { await onSaveAvatar({avatar_emoji:emoji,color}); setEditingAvatar(false) }
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      {onBack&&<button onClick={onBack} style={{...S.btnGhost,alignSelf:"flex-start",fontSize:12,padding:"7px 14px"}}>← Retour</button>}
+
+      {/* Header */}
+      <div style={{...S.card,padding:"28px 24px",position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",top:0,left:0,right:0,height:4,background:`linear-gradient(90deg,${level.color},${level.color}44)`}}/>
+        <div style={{display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+          <div style={{position:"relative"}}>
+            <Avatar emoji={user.avatar_emoji||emoji} color={user.color||color} size={80}/>
+            {isMe&&(
+              <button onClick={()=>setEditingAvatar(!editingAvatar)} style={{position:"absolute",bottom:-4,right:-4,background:C.c2,border:`1px solid ${C.bd}`,borderRadius:"50%",width:24,height:24,cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",color:C.t1}}>✏️</button>
+            )}
+          </div>
+          <div style={{flex:1,minWidth:160}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontSize:30,fontWeight:900}}>{user.name}</div>
+              {isMe&&<span style={S.tag(C.orange)}>Mon profil</span>}
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:6}}>
+              <span style={S.tag(level.color)}>{level.icon} {level.name}</span>
+              {user.city&&<span style={{fontSize:12,color:C.t2}}>📍 {user.city}</span>}
+            </div>
+            <div style={{fontSize:11,color:C.t3,marginTop:6}}>Membre depuis {user.joined_at?new Date(user.joined_at).toLocaleDateString("fr-FR",{month:"long",year:"numeric"}):"--"}</div>
+          </div>
+          {!isMe&&(
+            <button onClick={onFriendToggle} style={{...S.btn,background:isFriend?"transparent":C.orange,color:isFriend?C.green:C.t1,border:`1px solid ${isFriend?C.green:C.orange}`}}>
+              {isFriend?"✓ Ami":"+ Ajouter"}
+            </button>
+          )}
+        </div>
+
+        {/* Avatar editor */}
+        {editingAvatar&&isMe&&(
+          <div style={{marginTop:20,borderTop:`1px solid ${C.bd}`,paddingTop:16}}>
+            <EmojiPicker selected={emoji} onSelect={setEmoji} color={color} onColor={setColor}/>
+            <div style={{display:"flex",gap:8,marginTop:14}}>
+              <button onClick={()=>setEditingAvatar(false)} style={{...S.btnGhost,fontSize:12,padding:"7px 14px"}}>Annuler</button>
+              <button onClick={saveAvatar} style={{...S.btn,fontSize:12,padding:"7px 18px"}}>Sauvegarder</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+        <StatCard label="Sessions" value={workouts.length}/>
+        <StatCard label="ROX Score" value={rox} sub={level.name} accent={level.color}/>
+        <StatCard label="Meilleur effort" value={bestScore} accent={C.orange}/>
+        <StatCard label="Points" value={(workouts.length*180).toLocaleString()} accent={C.amber}/>
+      </div>
+
+      {/* Bio */}
+      <div style={{...S.card,padding:"20px 22px"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2}}>📝 Ma bio</div>
+          {isMe&&!editingBio&&<button onClick={()=>setEditingBio(true)} style={{...S.btnGhost,fontSize:11,padding:"5px 12px"}}>Modifier</button>}
+        </div>
+
+        {editingBio ? (
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div>
+              <label style={S.label}>Mon objectif</label>
+              <select style={{...S.input,cursor:"pointer"}} value={bio.objective} onChange={e=>setBio({...bio,objective:e.target.value})}>
+                <option value="">— Choisir —</option>
+                {BIO_OBJECTIVES.map(o=><option key={o}>{o}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={S.label}>Ma devise (60 car. max)</label>
+              <input style={S.input} value={bio.motto} onChange={e=>setBio({...bio,motto:e.target.value.slice(0,60)})} placeholder="Ex: No excuses, just results"/>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <div>
+                <label style={S.label}>Prochaine race</label>
+                <input type="date" style={S.input} value={bio.race_date} onChange={e=>setBio({...bio,race_date:e.target.value})}/>
+              </div>
+              <div>
+                <label style={S.label}>Ville de la race</label>
+                <input style={S.input} value={bio.race_city} onChange={e=>setBio({...bio,race_city:e.target.value})} placeholder="Ex: Casablanca"/>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setEditingBio(false)} style={{...S.btnGhost,fontSize:12,padding:"8px 16px"}}>Annuler</button>
+              <button onClick={saveBio} style={{...S.btn,fontSize:12}}>Sauvegarder</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            {user.bio_objective&&<div style={{display:"flex",gap:10}}><span style={{fontSize:16}}>🎯</span><div><div style={{fontSize:11,color:C.t2}}>Objectif</div><div style={{fontSize:14,color:C.t1,fontWeight:500}}>{user.bio_objective}</div></div></div>}
+            {user.bio_motto&&<div style={{display:"flex",gap:10}}><span style={{fontSize:16}}>💬</span><div><div style={{fontSize:11,color:C.t2}}>Devise</div><div style={{fontSize:14,color:C.t1,fontStyle:"italic"}}>"{user.bio_motto}"</div></div></div>}
+            {user.bio_race_date&&<div style={{display:"flex",gap:10}}><span style={{fontSize:16}}>🏆</span><div><div style={{fontSize:11,color:C.t2}}>Prochaine race</div><div style={{fontSize:14,color:C.orange,fontWeight:600}}>{new Date(user.bio_race_date).toLocaleDateString("fr-FR",{day:"numeric",month:"long",year:"numeric"})} — {user.bio_race_city}</div></div></div>}
+            {!user.bio_objective&&!user.bio_motto&&!user.bio_race_date&&(
+              <div style={{color:C.t3,fontSize:13,textAlign:"center",padding:"12px 0"}}>
+                {isMe?"Clique sur Modifier pour compléter ta bio 👆":"Aucune bio renseignée"}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* History */}
+      {workouts.length>0&&(
+        <div style={{...S.card,padding:"20px 22px"}}>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:"1.5px",textTransform:"uppercase",color:C.t2,marginBottom:16}}>📋 Historique</div>
+          {[...sorted].reverse().slice(0,6).map((w,i)=>(
+            <div key={w.id} style={{display:"flex",alignItems:"center",padding:"10px 0",borderBottom:i<5&&i<workouts.length-1?`1px solid ${C.bd}`:"none"}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,fontSize:13}}>{fmtDate(w.date)}</div>
+                <div style={{fontSize:11,color:C.t2,marginTop:2}}>
+                  {(w.blocks||[]).map(b=>BLOCK_TYPES.find(t=>t.id===b.type)?.icon||"⚡").join(" ")} · {fmt(w.total_time||0)}
+                </div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:18,color:i===0?C.green:C.t1}}>{w.effort_score||0}</div>
+                <div style={{fontSize:10,color:C.t2}}>pts effort</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════
+   🚀 APP
+══════════════════════════════════════════════════════════ */
 export default function App() {
-  const [clientId,  setClientId]  = useState(null)
-  const [profile,   setProfile]   = useState(null)
-  const [workouts,  setWorkouts]  = useState([])
-  const [sessions,  setSessions]  = useState([])
-  const [community, setCommunity] = useState([])
-  const [friends,   setFriends]   = useState(db.getFriends())
-  const [tab,       setTab]       = useState("dashboard")
-  const [viewingProfile, setViewingProfile] = useState(null)
-  const [loading,   setLoading]   = useState(true)
+  const [clientId,       setClientId]       = useState(null)
+  const [profile,        setProfile]        = useState(null)
+  const [workouts,       setWorkouts]       = useState([])
+  const [sessions,       setSessions]       = useState([])
+  const [community,      setCommunity]      = useState([])
+  const [recentActivity, setRecentActivity] = useState([])
+  const [friends,        setFriends]        = useState(db.getFriends())
+  const [tab,            setTab]            = useState("community")
+  const [viewingUser,    setViewingUser]    = useState(null)
+  const [loading,        setLoading]        = useState(true)
 
   useEffect(() => {
     (async () => {
-      const storedId = getStoredClientId()
-      if (storedId) {
-        const [prof, wkts, sess, comm] = await Promise.all([
-          db.getProfile(storedId),
-          db.getWorkouts(storedId),
+      const id = getStoredClientId()
+      if (id) {
+        const [prof, wkts, sess, comm, activity] = await Promise.all([
+          db.getProfile(id),
+          db.getWorkouts(id),
           db.getSessions(),
           db.getAllProfiles(),
+          db.getRecentActivity(),
         ])
         if (prof) {
-          setClientId(storedId)
-          setProfile(prof)
-          setWorkouts(wkts)
-          setSessions(sess)
-          setCommunity(comm)
+          setClientId(id); setProfile(prof)
+          setWorkouts(wkts); setSessions(sess)
+          setCommunity(comm); setRecentActivity(activity)
         }
       }
       setLoading(false)
     })()
-  }, [])
+  },[])
 
   const handleAuth = async (profileData, cid) => {
-    setClientId(cid)
-    setProfile(profileData)
-    const [wkts, sess, comm] = await Promise.all([
-      db.getWorkouts(cid),
-      db.getSessions(),
-      db.getAllProfiles(),
+    setClientId(cid); setProfile(profileData)
+    const [wkts, sess, comm, activity] = await Promise.all([
+      db.getWorkouts(cid), db.getSessions(), db.getAllProfiles(), db.getRecentActivity()
     ])
-    setWorkouts(wkts)
-    setSessions(sess)
-    setCommunity(comm)
+    setWorkouts(wkts); setSessions(sess); setCommunity(comm); setRecentActivity(activity)
   }
 
   const handleLogout = () => {
     clearStoredSession()
-    setClientId(null); setProfile(null); setWorkouts([]); setSessions([]); setCommunity([])
+    setClientId(null); setProfile(null); setWorkouts([])
   }
 
   const handleAddWorkout = async (workout) => {
     const saved = await db.addWorkout(clientId, workout)
     if (saved) {
-      const newWorkouts = [...workouts, saved]
-      setWorkouts(newWorkouts)
-      // Mise à jour des stats publiques du profil
-      const best  = Math.min(profile?.best_time || Infinity, workout.total_time)
-      const count = (profile?.workout_count || 0) + 1
-      const pts   = count * 180 + Math.round(7200 / best * 1000)
-      await db.updateProfileStats(clientId, {best_time:best, workout_count:count, points:pts})
-      setProfile(p => ({...p, best_time:best, workout_count:count, points:pts}))
+      const updated = [...workouts, saved]
+      setWorkouts(updated)
+      const rox = computeROX(updated)
+      const pts = updated.length * 180
+      await db.updateProfileStats(clientId, {workout_count:updated.length, points:pts, rox_score:rox})
+      setProfile(p=>({...p, workout_count:updated.length, points:pts, rox_score:rox}))
+      const activity = await db.getRecentActivity()
+      setRecentActivity(activity)
     }
   }
 
-  const handleAddSession = async (session) => {
-    const saved = await db.addSession(session)
-    if (saved) setSessions(p => [...p, saved])
+  const handleAddSession = async (s) => {
+    const saved = await db.addSession(s)
+    if (saved) setSessions(p=>[...p,saved])
   }
 
-  const handleJoinSession = async (sessionId) => {
-    const updated = await db.joinSession(sessionId, clientId)
-    if (updated) setSessions(p => p.map(s => s.id===sessionId ? updated : s))
+  const handleJoinSession = async (id) => {
+    const updated = await db.joinSession(id, clientId)
+    if (updated) setSessions(p=>p.map(s=>s.id===id?updated:s))
   }
 
   const handleUpdateWorkout = async (sessionId, workout) => {
     const updated = await db.updateSessionWorkout(sessionId, workout)
-    if (updated) setSessions(p => p.map(s => s.id===sessionId ? updated : s))
+    if (updated) setSessions(p=>p.map(s=>s.id===sessionId?updated:s))
   }
 
   const handleLogResult = async (sessionId, cid, result) => {
     await db.upsertSessionResult(sessionId, cid, result)
-    // La mise à jour se fait via le canal real-time dans SessionDetail
   }
 
   const handleFriendToggle = (cid) => {
-    const updated = friends.includes(cid) ? friends.filter(f=>f!==cid) : [...friends,cid]
+    const updated = friends.includes(cid)?friends.filter(f=>f!==cid):[...friends,cid]
     setFriends(updated); db.saveFriends(updated)
   }
 
-  if (loading)  return <Loading />
-  if (!profile) return <Auth onAuth={handleAuth} />
+  const handleSaveBio = async (bio) => {
+    await db.updateProfileStats(clientId, {bio_objective:bio.objective, bio_motto:bio.motto, bio_race_date:bio.race_date, bio_race_city:bio.race_city})
+    setProfile(p=>({...p, ...bio}))
+  }
+
+  const handleSaveAvatar = async (data) => {
+    await db.updateProfileStats(clientId, data)
+    setProfile(p=>({...p,...data}))
+  }
+
+  if (loading)  return <Loading/>
+  if (!profile) return <Auth onAuth={handleAuth}/>
 
   const NAV = [
-    {id:"dashboard", label:"Dashboard",    icon:"⚡"},
-    {id:"log",       label:"Entraînement", icon:"🔥"},
-    {id:"community", label:"Communauté",   icon:"👥"},
-    {id:"schedule",  label:"Planning",     icon:"📅"},
+    {id:"community", label:"Communauté", icon:"🌐"},
+    {id:"schedule",  label:"Planning",   icon:"📅"},
+    {id:"log",       label:"Session",    icon:"🔥"},
+    {id:"dashboard", label:"Stats",      icon:"📊"},
   ]
 
-  return (
-    <div style={{background:C.bg, minHeight:"100vh", fontFamily:"'Barlow',sans-serif", color:C.t1}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;900&family=Barlow+Condensed:wght@700;900&family=JetBrains+Mono:wght@400;600&display=swap');*{box-sizing:border-box}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:${C.c1}}::-webkit-scrollbar-thumb{background:#333;border-radius:4px}`}</style>
+  const rox = computeROX(workouts)
+  const level = getLevel(rox)
 
-      <div style={{background:C.c1,borderBottom:`1px solid ${C.bd}`,padding:"0 24px",display:"flex",alignItems:"center",gap:0,position:"sticky",top:0,zIndex:100}}>
-        <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:26,color:C.orange,letterSpacing:"-0.5px",paddingRight:28,marginRight:4,borderRight:`1px solid ${C.bd}`,paddingTop:14,paddingBottom:14}}>ROXPULSE</div>
+  return (
+    <div style={{background:C.bg, minHeight:"100vh", fontFamily:"sans-serif", color:C.t1}}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;900&family=Barlow+Condensed:wght@700;900&family=JetBrains+Mono:wght@400;600&display=swap');*{box-sizing:border-box}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#333;border-radius:4px}`}</style>
+
+      <div style={{background:C.c1,borderBottom:`1px solid ${C.bd}`,padding:"0 20px",display:"flex",alignItems:"center",position:"sticky",top:0,zIndex:100}}>
+        <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:900,fontSize:24,color:C.orange,letterSpacing:"-0.5px",paddingRight:24,marginRight:4,borderRight:`1px solid ${C.bd}`,paddingTop:14,paddingBottom:14}}>ROXPULSE</div>
         <nav style={{display:"flex",gap:0,flex:1,paddingLeft:8}}>
           {NAV.map(n=>(
-            <button key={n.id} onClick={()=>setTab(n.id)} style={{background:"transparent",border:"none",borderBottom:tab===n.id?`2px solid ${C.orange}`:"2px solid transparent",color:tab===n.id?C.t1:C.t2,padding:"16px 14px",cursor:"pointer",fontWeight:tab===n.id?700:500,fontSize:13,fontFamily:"inherit",transition:"all 0.15s",letterSpacing:"0.2px",whiteSpace:"nowrap"}}>
-              <span style={{marginRight:5,fontSize:14}}>{n.icon}</span>{n.label}
+            <button key={n.id} onClick={()=>{setViewingUser(null);setTab(n.id)}} style={{background:"transparent",border:"none",borderBottom:tab===n.id&&!viewingUser?`2px solid ${C.orange}`:"2px solid transparent",color:tab===n.id&&!viewingUser?C.t1:C.t2,padding:"14px 12px",cursor:"pointer",fontWeight:tab===n.id?700:400,fontSize:13,fontFamily:"inherit",whiteSpace:"nowrap"}}>
+              <span style={{marginRight:4}}>{n.icon}</span>{n.label}
             </button>
           ))}
         </nav>
-        <div style={{display:"flex",alignItems:"center",gap:10,paddingLeft:16}}>
-          <div onClick={()=>setTab("profile")} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:"10px 8px",borderRadius:8,transition:"opacity 0.15s"}} onMouseEnter={e=>e.currentTarget.style.opacity="0.75"} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
-            <Avatar name={profile.name} color={profile.color} size={32} />
-            <div>
-              <div style={{fontWeight:600,fontSize:13,lineHeight:1.2}}>{profile.name}</div>
-              <div style={{fontSize:11,color:C.t2}}>{profile.category}{profile.city?` · ${profile.city}`:""}</div>
+        <div style={{display:"flex",alignItems:"center",gap:8,paddingLeft:12}}>
+          <div onClick={()=>{setViewingUser(null);setTab("profile")}} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",padding:"8px",borderRadius:8}} onMouseEnter={e=>e.currentTarget.style.opacity="0.7"} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
+            <Avatar emoji={profile.avatar_emoji} color={profile.color} name={profile.name} size={30}/>
+            <div style={{display:"flex",flexDirection:"column"}}>
+              <span style={{fontSize:12,fontWeight:600,lineHeight:1.2}}>{profile.name}</span>
+              <span style={{fontSize:10,color:level.color}}>{level.icon} {level.name}</span>
             </div>
           </div>
-          <button onClick={handleLogout} title="Se déconnecter" style={{background:"transparent",border:`1px solid ${C.bd}`,borderRadius:8,color:C.t3,cursor:"pointer",fontSize:16,padding:"6px 10px",lineHeight:1}} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.t3}>
-            ⏻
-          </button>
+          <button onClick={handleLogout} title="Déconnexion" style={{background:"transparent",border:`1px solid ${C.bd}`,borderRadius:8,color:C.t3,cursor:"pointer",fontSize:16,padding:"6px 10px"}} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.t3}>⏻</button>
         </div>
       </div>
 
-      <div style={{maxWidth:920,margin:"0 auto",padding:"24px 20px"}}>
-        {viewingProfile ? (
+      <div style={{maxWidth:900,margin:"0 auto",padding:"20px 16px"}}>
+        {viewingUser ? (
           <ProfilePage
-            user={viewingProfile.user}
-            workouts={viewingProfile.workouts}
-            isMe={viewingProfile.user.client_id===clientId||viewingProfile.user.client_id==="me"}
-            onBack={()=>setViewingProfile(null)}
-            isFriend={friends.includes(viewingProfile.user.client_id)}
-            onFriendToggle={()=>handleFriendToggle(viewingProfile.user.client_id)}
+            user={viewingUser}
+            workouts={[]}
+            isMe={viewingUser.client_id===clientId}
+            onBack={()=>setViewingUser(null)}
+            isFriend={friends.includes(viewingUser.client_id)}
+            onFriendToggle={()=>handleFriendToggle(viewingUser.client_id)}
+            onSaveBio={handleSaveBio}
+            onSaveAvatar={handleSaveAvatar}
           />
         ) : tab==="profile" ? (
           <ProfilePage
-            user={{...profile, client_id:clientId}}
+            user={{...profile,client_id:clientId}}
             workouts={workouts}
             isMe={true}
             onBack={()=>setTab("dashboard")}
+            onSaveBio={handleSaveBio}
+            onSaveAvatar={handleSaveAvatar}
           />
-        ) : tab==="dashboard" ? <Dashboard workouts={workouts} />
-          : tab==="log"       ? <LogWorkout onAdd={handleAddWorkout} workouts={workouts} />
-          : tab==="community" ? <Community clientId={clientId} myProfile={profile} myWorkouts={workouts} community={community} friends={friends} onFriendToggle={handleFriendToggle} onViewProfile={(user,wkts)=>setViewingProfile({user,workouts:wkts})} />
-          : tab==="schedule"  ? <Schedule  clientId={clientId} myProfile={profile} sessions={sessions} onAdd={handleAddSession} onJoin={handleJoinSession} onUpdateWorkout={handleUpdateWorkout} onLogResult={handleLogResult} />
+        ) : tab==="dashboard" ? <Dashboard workouts={workouts} profile={profile}/>
+          : tab==="log"       ? <LogWorkout onAdd={handleAddWorkout}/>
+          : tab==="community" ? <Community clientId={clientId} myProfile={profile} myWorkouts={workouts} community={community} friends={friends} onFriendToggle={handleFriendToggle} onViewProfile={setViewingUser} recentActivity={recentActivity}/>
+          : tab==="schedule"  ? <Schedule clientId={clientId} myProfile={profile} sessions={sessions} onAdd={handleAddSession} onJoin={handleJoinSession} onUpdateWorkout={handleUpdateWorkout} onLogResult={handleLogResult}/>
           : null}
       </div>
     </div>
